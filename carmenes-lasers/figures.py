@@ -19,3 +19,16 @@ plt.rcParams.update({'axes.linewidth' : 1.5,
                     })
 plt.style.use('tableau-colorblind10')
 tableau_cb10 = plt.rcParams['axes.prop_cycle'].by_key()['color'] 
+
+def plot_spectra_elike(x, y, n_sections, figsize=(20, 20), title=None, xlabel=None, ylabel=None):
+    fig, axs = plt.subplots(n_sections, figsize=figsize)
+    x_sections = np.array_split(x, n_sections)
+    y_sections = np.array_split(y, n_sections)
+
+    for i in range(n_sections):
+        axs[i].plot(x_sections[i], y_sections[i])
+
+    axs[-1].set(xlabel=xlabel if xlabel is not None else None)
+    axs[(n_sections//2)].set(ylabel=ylabel if ylabel is not None else None)
+    fig.suptitle(title if title is not None else None)
+    plt.show()
