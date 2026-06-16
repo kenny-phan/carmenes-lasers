@@ -1,3 +1,4 @@
+import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
@@ -14,21 +15,23 @@ plt.rcParams.update({'axes.linewidth' : 1.5,
                      'axes.labelsize': 18,
                      'axes.labelpad' : 5,
                      'axes.titlesize' : 24,
-                     'axes.titlepad' : 10,
+                     'axes.titlepad' : 0,
                      'font.family': 'Serif'
                     })
 plt.style.use('tableau-colorblind10')
 tableau_cb10 = plt.rcParams['axes.prop_cycle'].by_key()['color'] 
 
-def plot_spectra_elike(x, y, n_sections, figsize=(20, 20), title=None, xlabel=None, ylabel=None):
-    fig, axs = plt.subplots(n_sections, figsize=figsize)
+def debug_print(verbose, *args):
+    if verbose:
+        print(*args)
+        
+def plot_spectra_elike(fig, axs, x, y, n_sections, title=None, xlabel=None, ylabel=None):
     x_sections = np.array_split(x, n_sections)
     y_sections = np.array_split(y, n_sections)
-
-    for i in range(n_sections):
-        axs[i].plot(x_sections[i], y_sections[i])
 
     axs[-1].set(xlabel=xlabel if xlabel is not None else None)
     axs[(n_sections//2)].set(ylabel=ylabel if ylabel is not None else None)
     fig.suptitle(title if title is not None else None)
-    plt.show()
+
+    for i in range(n_sections):
+        axs[i].plot(x_sections[i], y_sections[i])
