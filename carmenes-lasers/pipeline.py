@@ -1,4 +1,5 @@
 import numpy as np
+from astropy.modeling.models import Voigt1D
 
 from figures import debug_print
 
@@ -26,3 +27,23 @@ def full_width_half_max(x, y, peakx, peaky, max_diff, verbose=False):
         fwhm_arr.append(fwhm)
         
     return np.array(fwhm_arr)
+
+def lsf_per_wav(spec, spec_peaks,
+                amplitude_L=1, 
+                w_lorentz=np.array([0.28, 0.21, 0.17]) * 1e-5, 
+                w_gauss=np.array([1.0, 1.01, 1.18]) * 1e-5):
+    
+    for wl in spec_peaks:
+        if wl <= 6000:
+            windex = 0
+        elif (wl > 6000) and (wl <= 9600):
+            windex = 1
+        elif wl > 9600:
+            windex = 2
+    
+        v1 = Voigt1D(x_0=wl, 
+                     amplitude_L=amplitude_L, 
+                     fwhm_L=w_lorentz[windex]*wl, 
+                     fwhm_G=w_gauss[windex]*wl)
+    
+    return v1(spec)
