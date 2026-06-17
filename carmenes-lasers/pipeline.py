@@ -24,4 +24,5 @@ def full_width_half_max(x, y, peakx, peaky, max_diff, verbose=False):
         debug_print(verbose, "lower, upper freqs", lower_freq, upper_freq)
         fwhm = upper_freq - lower_freq
         fwhm_arr.append(fwhm)
-    return fwhm_arr
+        
+    return np.array(fwhm_arr)
