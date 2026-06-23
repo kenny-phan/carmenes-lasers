@@ -1,5 +1,9 @@
+import astropy.units as u
 import numpy as np
+
 from astropy.modeling.models import Voigt1D
+from specutils import Spectrum
+from specutils.manipulation import FluxConservingResampler
 
 from figures import debug_print
 
@@ -48,7 +52,10 @@ def lsf_per_wav(spec, spec_peaks,
     
     return v1(spec)
 
-def numpy_resample(wave_arr, spec_arr, ordidx, step=0.5):
+def resample(wave_arr, spec_arr, ordidx, step=0.5,
+             resampler="numpy", u_wav=u.angstrom, 
+             u_flx=u.count):
+    
     n_obs = spec_arr.shape[2]
     n_cols = spec_arr.shape[1]
     
@@ -70,6 +77,9 @@ def numpy_resample(wave_arr, spec_arr, ordidx, step=0.5):
     # resample each spectrum onto new_wave
     new_spec_arr = np.empty((n_cols, n_obs), dtype=float)
     
+    if resampler == "fcr":
+        fluxc_resample = FluxConservingResampler()
+    
     for i in range(n_obs):
         w = wave_arr[ordidx, :, i]
         s = spec_arr[ordidx, :, i]
@@ -78,6 +88,14 @@ def numpy_resample(wave_arr, spec_arr, ordidx, step=0.5):
         m = (w >= max_first) & (w <= min_last)
     
         # if your wave grid is monotonic increasing, np.interp works directly
-        new_spec_arr[:, i] = np.interp(new_wave, w[m], s[m])
+        if resampler == "numpy":
+            new_spec_arr[:, i] = np.interp(new_wave, w[m], s[m])
+            
+        if resampler == "fcr":
+            input_spectra = Spectrum(flux=s[m] * u_flx, 
+                         spectral_axis=w[m] * u_wav)
+            flux_resampled = fluxc_resample(input_spectra, 
+                                            new_wave * u_wav)
+            new_spec_arr[:, i] = flux_resampled.data
 
     return new_wave, new_spec_arr
