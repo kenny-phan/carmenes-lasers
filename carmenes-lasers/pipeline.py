@@ -47,3 +47,37 @@ def lsf_per_wav(spec, spec_peaks,
                      fwhm_G=w_gauss[windex]*wl)
     
     return v1(spec)
+
+def numpy_resample(wave_arr, spec_arr, ordidx, step=0.5):
+    n_obs = spec_arr.shape[2]
+    n_cols = spec_arr.shape[1]
+    
+    # collect wave endpoints across all observations
+    first_waves = np.empty(n_obs)
+    last_waves  = np.empty(n_obs)
+    
+    for i in range(n_obs):
+        w = wave_arr[ordidx, :, i]
+        first_waves[i] = w[0]
+        last_waves[i]  = w[-1]
+    
+    # rounding to nearest step:
+    max_first = step * np.ceil(first_waves.max() / step)   # up for wave[0]
+    min_last  = step * np.floor(last_waves.min() / step)   # down for wave[-1]
+    
+    new_wave = np.linspace(max_first, min_last, n_cols)
+    
+    # resample each spectrum onto new_wave
+    new_spec_arr = np.empty((n_cols, n_obs), dtype=float)
+    
+    for i in range(n_obs):
+        w = wave_arr[ordidx, :, i]
+        s = spec_arr[ordidx, :, i]
+    
+        # restrict to the overlap region to avoid extrapolation
+        m = (w >= max_first) & (w <= min_last)
+    
+        # if your wave grid is monotonic increasing, np.interp works directly
+        new_spec_arr[:, i] = np.interp(new_wave, w[m], s[m])
+
+    return new_wave, new_spec_arr
