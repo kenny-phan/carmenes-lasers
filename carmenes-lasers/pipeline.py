@@ -52,6 +52,25 @@ def lsf_per_wav(spec, spec_peaks,
     
     return v1(spec)
 
+def doppler_shift(wave_arr, velocity):
+    """
+    Doppler shift the wavelength array by a velocity (in m/s).
+    
+    Parameters
+    ----------
+    wave_arr: array
+        1d wavelengths array (in any units, e.g., nm or µm)
+    velocity: float
+        Velocity in m/s
+
+    Returns
+    -------
+    array 
+        Doppler-shifted wavelengths
+    """
+    C = 299792458.0  # Speed of light in m/s
+    return wave_arr * (1 + velocity / C)
+
 def resample(wave_arr, spec_arr, ordidx, step=0.5,
              resampler="numpy", u_wav=u.angstrom, 
              u_flx=u.count):
@@ -99,3 +118,12 @@ def resample(wave_arr, spec_arr, ordidx, step=0.5,
             new_spec_arr[:, i] = flux_resampled.data
 
     return new_wave, new_spec_arr
+
+def remove_polyfit(wave, spectra, degree=4):
+    med = np.nanmedian(spectra)
+    nonan_spectra = np.where(np.isfinite(spectra), spectra, med)  # replace NaN/Inf with median
+
+    z = np.polyfit(wave, nonan_spectra, degree)
+    p = np.poly1d(z)
+
+    return p(wave)
