@@ -52,6 +52,7 @@ def lsf_per_wav(spec, spec_peaks,
     
     return v1(spec)
 
+# ___DOPPLER CORRECT FOR EARTH ORBIT___
 def doppler_shift(wave_arr, velocity):
     """
     Doppler shift the wavelength array by a velocity (in m/s).
@@ -71,6 +72,22 @@ def doppler_shift(wave_arr, velocity):
     C = 299792458.0  # Speed of light in m/s
     return wave_arr * (1 + velocity / C)
 
+def ds_wave_cube(wave_arr, bary_corr_arr):
+    """
+    Parameters
+    ----------
+    wave_arr: array of shape (order/detector, wave cols, observations)
+    bary_corr_arr: 1d array of HELCOR values in km/s
+    """
+    shifted_wave_arr = np.empty_like(wave_arr)
+    
+    for order in range(len(wave_arr)):
+        for obs in range(wave_arr.shape[2]):
+            shifted_wave_arr[order, :, obs] = doppler_shift(wave_arr[order, :, obs], bary_corr_arr[obs] * 1000)
+
+    return shifted_wave_arr
+
+# ___RESAMPLE TO CONSISTENT WAVE GRID___
 def resample(wave_arr, spec_arr, ordidx, step=0.5,
              resampler="numpy", u_wav=u.angstrom, 
              u_flx=u.count):
@@ -119,7 +136,8 @@ def resample(wave_arr, spec_arr, ordidx, step=0.5,
 
     return new_wave, new_spec_arr
 
-def remove_polyfit(wave, spectra, degree=4):
+# ___REMOVE CONTINUUM__
+def polyfit(wave, spectra, degree=4):
     med = np.nanmedian(spectra)
     nonan_spectra = np.where(np.isfinite(spectra), spectra, med)  # replace NaN/Inf with median
 
@@ -127,3 +145,20 @@ def remove_polyfit(wave, spectra, degree=4):
     p = np.poly1d(z)
 
     return p(wave)
+
+def remove_polyfit(new_wave, new_spec_arr, degree=4):
+    """
+    only for 1 order!
+    Parameters
+    ----------
+    new_spec_arr: array of shape (wave cols, obs)
+    """
+    poly_arr = np.empty_like(new_spec_arr)
+    nopoly_arr = np.empty_like(new_spec_arr)
+    for obs in range(new_spec_arr.shape[1]):
+        poly_arr[:, obs] = polyfit(new_wave, 
+                                   new_spec_arr[:, obs], 
+                                   degree=degree)
+        nopoly_arr[:, obs] = new_spec_arr[:, obs]/poly_arr[:, obs]
+
+    return poly_arr, nopoly_arr
