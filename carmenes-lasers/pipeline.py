@@ -2,13 +2,15 @@ import astropy.units as u
 import numpy as np
 
 from astropy.modeling.models import Voigt1D
+from scipy.signal import find_peaks
 from specutils import Spectrum
 from specutils.manipulation import FluxConservingResampler
+from tqdm import tqdm
 
 from figures import debug_print
 
 def simple_threshold(flux, coeff):
-    return np.median(flux) + coeff * np.std(flux)
+    return np.nanmedian(flux) + coeff * np.nanstd(flux)
 
 def full_width_half_max(x, y, peakx, peaky, max_diff, verbose=False):
     fwhm_arr = []
@@ -32,24 +34,33 @@ def full_width_half_max(x, y, peakx, peaky, max_diff, verbose=False):
         
     return np.array(fwhm_arr)
 
-def lsf_per_wav(spec, spec_peaks,
+def spec_to_fwhms(spec, flux, sigma, max_diff=0.01, verbose=False):
+    threshold = simple_threshold(flux, sigma) # get the std threshold
+
+    peaks, _ = find_peaks(flux, threshold) # get peaks above threshold 
+    spec_pks, flx_pks = spec[peaks], flux[peaks]
+    
+    fwhms = full_width_half_max(spec, flux, spec_pks, flx_pks, max_diff, verbose=verbose) # fwhm of peaks
+
+    return fwhms
+
+def lsf_per_wav(spec, wl,
                 amplitude_L=1, 
                 w_lorentz=np.array([0.28, 0.21, 0.17]) * 1e-5, 
                 w_gauss=np.array([1.0, 1.01, 1.18]) * 1e-5):
     
-    for wl in spec_peaks:
-        if wl <= 6000:
-            windex = 0
-        elif (wl > 6000) and (wl <= 9600):
-            windex = 1
-        elif wl > 9600:
-            windex = 2
-    
-        v1 = Voigt1D(x_0=wl, 
-                     amplitude_L=amplitude_L, 
-                     fwhm_L=w_lorentz[windex]*wl, 
-                     fwhm_G=w_gauss[windex]*wl)
-    
+    if wl <= 6000:
+        windex = 0
+    elif (wl > 6000) and (wl <= 9600):
+        windex = 1
+    elif wl > 9600:
+        windex = 2
+
+    v1 = Voigt1D(x_0=wl, 
+                 amplitude_L=amplitude_L, 
+                 fwhm_L=w_lorentz[windex]*wl, 
+                 fwhm_G=w_gauss[windex]*wl)
+
     return v1(spec)
 
 # ___DOPPLER CORRECT FOR EARTH ORBIT___
@@ -88,33 +99,29 @@ def ds_wave_cube(wave_arr, bary_corr_arr):
     return shifted_wave_arr
 
 # ___RESAMPLE TO CONSISTENT WAVE GRID___
-def resample(wave_arr, spec_arr, ordidx, step=0.5,
+def resample(wave_arr, spec_arr, ordidx, new_wave=None, step=0.5,
              resampler="numpy", u_wav=u.angstrom, 
              u_flx=u.count):
     
     n_obs = spec_arr.shape[2]
-    n_cols = spec_arr.shape[1]
+
+    if new_wave is None:
+        first_waves = np.array([wave_arr[ordidx, 0, i] for i in range(n_obs)])
+        last_waves  = np.array([wave_arr[ordidx, -1, i] for i in range(n_obs)])
+        
+        max_first = step * np.ceil(first_waves.max() / step)
+        min_last  = step * np.floor(last_waves.min() / step)
+        new_wave = np.linspace(max_first, min_last, wave_arr.shape[1])
     
-    # collect wave endpoints across all observations
-    first_waves = np.empty(n_obs)
-    last_waves  = np.empty(n_obs)
-    
-    for i in range(n_obs):
-        w = wave_arr[ordidx, :, i]
-        first_waves[i] = w[0]
-        last_waves[i]  = w[-1]
-    
-    # rounding to nearest step:
-    max_first = step * np.ceil(first_waves.max() / step)   # up for wave[0]
-    min_last  = step * np.floor(last_waves.min() / step)   # down for wave[-1]
-    
-    new_wave = np.linspace(max_first, min_last, n_cols)
-    
-    # resample each spectrum onto new_wave
-    new_spec_arr = np.empty((n_cols, n_obs), dtype=float)
-    
+    new_spec_arr = np.empty((len(new_wave), n_obs), dtype=float)
+        
     if resampler == "fcr":
         fluxc_resample = FluxConservingResampler()
+        wave_arr *= u_wav
+        spec_arr *= u_flx
+        new_wave *= u_wav
+        max_first *= u_wav
+        min_last *= u_wav
     
     for i in range(n_obs):
         w = wave_arr[ordidx, :, i]
@@ -123,18 +130,32 @@ def resample(wave_arr, spec_arr, ordidx, step=0.5,
         # restrict to the overlap region to avoid extrapolation
         m = (w >= max_first) & (w <= min_last)
     
-        # if your wave grid is monotonic increasing, np.interp works directly
         if resampler == "numpy":
             new_spec_arr[:, i] = np.interp(new_wave, w[m], s[m])
             
         if resampler == "fcr":
-            input_spectra = Spectrum(flux=s[m] * u_flx, 
-                         spectral_axis=w[m] * u_wav)
+            input_spectra = Spectrum(flux=s[m], 
+                         spectral_axis=w[m])
             flux_resampled = fluxc_resample(input_spectra, 
-                                            new_wave * u_wav)
+                                            new_wave)
             new_spec_arr[:, i] = flux_resampled.data
 
     return new_wave, new_spec_arr
+
+def resample_ords(shifted_wave_arr, spec_arr, resampler="fcr", save_dir=None):
+    new_wave_arr = np.empty_like(shifted_wave_arr[:, :, 0])
+    new_spec_arr = np.empty_like(shifted_wave_arr)
+    
+    for i in tqdm(range(len(new_wave_arr))):
+        new_wave, new_spec = resample(shifted_wave_arr, spec_arr, i, resampler=resampler)
+        new_wave_arr[i, :] = new_wave
+        new_spec_arr[i, :, :] = new_spec
+
+    if save_dir:
+        np.save(save_dir + "wave_grid.npy", new_wave_arr)
+        np.save(save_dir + "resampled_spec.npy", new_spec_arr)
+
+    return new_wave_arr, new_spec_arr
 
 # ___REMOVE CONTINUUM__
 def polyfit(wave, spectra, degree=4):
