@@ -9,6 +9,17 @@ from tqdm import tqdm
 
 from figures import debug_print
 
+def check_spec_std(spec_arr, coeff=1):
+    # Calculate std across wave_cols (axis 1) for all orders and observations
+    std_array = np.nanstd(spec_arr, axis=1)  # shape: (orders, observations)
+    
+    std_mean = np.nanmean(std_array)
+    std_std = np.std(std_array)
+    
+    # Return boolean array where True indicates std > threshold
+    excess_std_mask = std_array > (std_mean + std_std)
+    return excess_std_mask
+
 def simple_threshold(flux, coeff):
     return np.nanmedian(flux) + coeff * np.nanstd(flux)
 
@@ -152,8 +163,8 @@ def resample_ords(shifted_wave_arr, spec_arr, resampler="fcr", save_dir=None):
         new_spec_arr[i, :, :] = new_spec
 
     if save_dir:
-        np.save(save_dir + "wave_grid.npy", new_wave_arr)
-        np.save(save_dir + "resampled_spec.npy", new_spec_arr)
+        np.save(save_dir + "/wave_grid.npy", new_wave_arr)
+        np.save(save_dir + "/resampled_spec.npy", new_spec_arr)
 
     return new_wave_arr, new_spec_arr
 
