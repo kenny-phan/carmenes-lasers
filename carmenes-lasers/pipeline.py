@@ -42,7 +42,7 @@ def doppler_shift(wave_arr, velocity):
     Parameters
     ----------
     wave_arr: array
-        1d wavelengths array (in any units, e.g., nm or µm)
+        1d wavelengths array (in any units)
     velocity: float
         Velocity in m/s
 
@@ -172,6 +172,19 @@ def remove_polyfit(new_wave, new_spec_arr, bins=50, degree=4):
         nopoly_arr[:, obs] = new_spec_arr[:, obs]/poly_arr[:, obs]
 
     return poly_arr, nopoly_arr
+
+def remove_polyfit_orders(new_wave, no_nan_spec_arr, bins=10, degree=4):
+    poly_arr_bin = np.empty_like(no_nan_spec_arr)
+    nopoly_arr_bin = np.empty_like(no_nan_spec_arr)
+    
+    for i in range(len(no_nan_spec_arr)):
+        # print(f"Processing order {i}, shape: {no_nan_spec_arr[i].shape}")
+        poly_arr_bin[i], nopoly_arr_bin[i] = remove_polyfit(new_wave, 
+                                                            no_nan_spec_arr[i], 
+                                                            bins=bins, 
+                                                            degree=degree)
+
+    return poly_arr_bin, nopoly_arr_bin
 
 # ___LASER DETECTION___
 def simple_threshold(flux, coeff):
