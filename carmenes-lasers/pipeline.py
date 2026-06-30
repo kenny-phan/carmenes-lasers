@@ -70,7 +70,7 @@ def ds_wave_cube(wave_arr, bary_corr_arr):
     return shifted_wave_arr
 
 # ___RESAMPLE TO CONSISTENT WAVE GRID___
-def resample(wave_arr, spec_arr, ordidx, new_wave=None, step=0.5,
+def resample(wave_arr, spec_arr, sig_arr, ordidx, new_wave=None, step=0.5,
              resampler="numpy", u_wav=u.angstrom, 
              u_flx=u.count):
     
@@ -82,14 +82,19 @@ def resample(wave_arr, spec_arr, ordidx, new_wave=None, step=0.5,
         
         max_first = step * np.ceil(first_waves.max() / step)
         min_last  = step * np.floor(last_waves.min() / step)
-        new_wave = np.linspace(max_first, min_last, wave_arr.shape[1])
-    
-    new_spec_arr = np.empty((len(new_wave), n_obs), dtype=float)
+        wave = np.linspace(max_first, min_last, wave_arr.shape[1])
+
+        new_wave = np.tile(wave[:, np.newaxis], (1, n_obs))
         
+    new_spec = np.empty((len(new_wave), n_obs), dtype=float)
+    new_sig = np.empty((len(new_wave), n_obs), dtype=float)
+
     if resampler == "fcr":
         fluxc_resample = FluxConservingResampler()
         wave_arr *= u_wav
         spec_arr *= u_flx
+        sig_arr *= u_flx
+        
         new_wave *= u_wav
         max_first *= u_wav
         min_last *= u_wav
@@ -97,36 +102,46 @@ def resample(wave_arr, spec_arr, ordidx, new_wave=None, step=0.5,
     for i in range(n_obs):
         w = wave_arr[ordidx, :, i]
         s = spec_arr[ordidx, :, i]
+        sig = sig_arr[ordidx, :, i]
     
         # restrict to the overlap region to avoid extrapolation
         m = (w >= max_first) & (w <= min_last)
     
         if resampler == "numpy":
-            new_spec_arr[:, i] = np.interp(new_wave, w[m], s[m])
+            new_spec[:, i] = np.interp(new_wave[:, i], w[m], s[m])
+            new_sig[:, i] = np.interp(new_wave[:, i], w[m], sig[m])
             
         if resampler == "fcr":
             input_spectra = Spectrum(flux=s[m], 
                          spectral_axis=w[m])
+            input_sigma = Spectrum(flux=sig[m],
+                                   spectral_axis=w[m])
             flux_resampled = fluxc_resample(input_spectra, 
-                                            new_wave)
-            new_spec_arr[:, i] = flux_resampled.data
+                                            new_wave[:, i])
+            sig_resampled = fluxc_resample(input_sigma,
+                                          new_wave[:, i])
+            new_spec[:, i] = flux_resampled.data
+            new_sig[:, i] = sig_resampled.data
+            
+    return new_wave, new_spec, new_sig
 
-    return new_wave, new_spec_arr
-
-def resample_ords(shifted_wave_arr, spec_arr, resampler="fcr", save_dir=None):
-    new_wave_arr = np.empty_like(shifted_wave_arr[:, :, 0])
+def resample_ords(shifted_wave_arr, spec_arr, sig_arr, resampler="fcr", save_dir=None):
+    new_wave_arr = np.empty_like(shifted_wave_arr)
     new_spec_arr = np.empty_like(shifted_wave_arr)
+    new_sig_arr = np.empty_like(shifted_wave_arr)
     
     for i in tqdm(range(len(new_wave_arr))):
-        new_wave, new_spec = resample(shifted_wave_arr, spec_arr, i, resampler=resampler)
-        new_wave_arr[i, :] = new_wave
+        new_wave, new_spec, new_sig = resample(shifted_wave_arr, spec_arr, sig_arr, i, resampler=resampler)
+        new_wave_arr[i, :, :] = new_wave
         new_spec_arr[i, :, :] = new_spec
+        new_sig_arr[i, :, :] = new_sig
 
     if save_dir:
-        np.save(save_dir + "/wave_grid.npy", new_wave_arr)
+        np.save(save_dir + "/resampled_wave.npy", new_wave_arr)
         np.save(save_dir + "/resampled_spec.npy", new_spec_arr)
+        np.save(save_dir + "/resampled_sig.npy", new_sig_arr)
 
-    return new_wave_arr, new_spec_arr
+    return new_wave_arr, new_spec_arr, new_sig_arr
 
 # ___REMOVE CONTINUUM__
 
@@ -148,43 +163,138 @@ def bin_order(new_wave, no_nan_spec, bins=50, degree=4):
     
     poly = np.interp(new_wave, bin_midpts, bin_poly)
 
-    return poly
+    return poly, bin_midpts, bin_meds
 
-def remove_polyfit(new_wave, new_spec_arr, bins=50, degree=4):
+def remove_polyfit(new_wave, new_spec, bins=50, degree=4):
     """
     only for 1 order!
     Parameters
     ----------
-    new_spec_arr: array of shape (wave cols, obs)
+    new_spec: array of shape (wave cols, obs)
     """
-    poly_arr = np.empty_like(new_spec_arr)
-    nopoly_arr = np.empty_like(new_spec_arr)
-    for obs in range(new_spec_arr.shape[1]):
-        if bins: 
-            poly_arr[:, obs] = bin_order(new_wave, 
-                                       new_spec_arr[:, obs], 
+    n_obs = new_spec.shape[1]
+
+    poly = np.empty_like(new_spec)
+    nopoly = np.empty_like(new_spec)
+
+    bin_midpts = np.empty((bins, n_obs))
+    bin_meds = np.empty((bins, n_obs))
+    
+    for obs in range(n_obs):
+        if bins > 0: 
+            poly[:, obs], bin_midpts[:, obs], bin_meds[:, obs] = bin_order(new_wave, 
+                                       new_spec[:, obs], 
                                          bins=bins, 
                                        degree=degree)
         else: 
-            poly_arr[:, obs] = polyfit(new_wave, 
-                                   new_spec_arr[:, obs], 
+            poly[:, obs] = polyfit(new_wave, 
+                                   new_spec[:, obs], 
                                    degree=degree)
-        nopoly_arr[:, obs] = new_spec_arr[:, obs]/poly_arr[:, obs]
+        nopoly[:, obs] = new_spec[:, obs]/poly[:, obs]
 
-    return poly_arr, nopoly_arr
+    return poly, nopoly, bin_midpts, bin_meds
 
-def remove_polyfit_orders(new_wave, no_nan_spec_arr, bins=10, degree=4):
-    poly_arr_bin = np.empty_like(no_nan_spec_arr)
-    nopoly_arr_bin = np.empty_like(no_nan_spec_arr)
+def remove_polyfit_orders(wave_arr, no_nan_spec_arr, bins=10, degree=4):
+    n_ords = no_nan_spec_arr.shape[0]
+    n_obs = no_nan_spec_arr.shape[2]
     
-    for i in range(len(no_nan_spec_arr)):
-        # print(f"Processing order {i}, shape: {no_nan_spec_arr[i].shape}")
-        poly_arr_bin[i], nopoly_arr_bin[i] = remove_polyfit(new_wave, 
-                                                            no_nan_spec_arr[i], 
-                                                            bins=bins, 
-                                                            degree=degree)
+    poly_arr = np.empty_like(no_nan_spec_arr)
+    nopoly_arr = np.empty_like(no_nan_spec_arr)
 
-    return poly_arr_bin, nopoly_arr_bin
+    bin_midpts_arr = np.empty((n_ords, bins, n_obs))
+    bin_meds_arr = np.empty((n_ords, bins, n_obs))
+    
+    for i in range(n_ords):
+        # print(f"Processing order {i}, shape: {no_nan_spec_arr[i].shape}")
+        new_wave = wave_arr[i, :, 0]
+        (poly_arr[i], 
+         nopoly_arr[i], 
+         bin_midpts_arr[i], 
+         bin_meds_arr[i]) = remove_polyfit(new_wave, 
+                                           no_nan_spec_arr[i], 
+                                           bins=bins, 
+                                           degree=degree)
+
+    return poly_arr, nopoly_arr, bin_midpts_arr, bin_meds_arr
+
+def chi2(x, mu, sig):
+    unsummed = ((x - mu)/sig)**2
+    return np.sum(unsummed, axis=1)
+
+def bic_chi2(k, n, x, mu, sig):
+    dof = n - k
+    reduced_chi2 = chi2(x, mu, sig) / dof
+    return k*np.log(n) + reduced_chi2
+    
+def find_best_poly(wave_arr, spec_arr, sig_arr, 
+                   degrees=[1, 2, 3, 4, 5], 
+                   bins=25, base_bic=1e6, 
+                   verbose=False):
+
+    n_ords = spec_arr.shape[0]
+    n_obs = spec_arr.shape[2] 
+    
+    bic_vals = np.ones((n_ords, n_obs)) * base_bic
+    deg_vals = np.zeros((n_ords, n_obs))  
+
+    poly_arr_best = np.empty_like(spec_arr) 
+    nopoly_arr_best = np.empty_like(spec_arr)
+    bin_midpts_arr_best = np.empty((n_ords, bins, n_obs))
+    bin_meds_arr_best = np.empty((n_ords, bins, n_obs))
+
+    for degree in degrees:
+        # Create mask: skip indices where best degree is 2+ below current
+        # This means BIC already got worse, won't improve at higher degrees
+        converged_mask = (deg_vals < degree - 1)
+
+        mask_ord, mask_obs = np.where(converged_mask)
+        spec_arr_masked = spec_arr.copy()
+        sig_arr_masked = sig_arr.copy()
+        
+        # Use advanced indexing with full range for wavelengths
+        spec_arr_masked[mask_ord[:, np.newaxis], :, mask_obs[:, np.newaxis]] = 0
+        sig_arr_masked[mask_ord[:, np.newaxis], :, mask_obs[:, np.newaxis]] = np.inf
+
+        (poly_arr, 
+         nopoly_arr, 
+         bin_midpts_arr, 
+         bin_meds_arr) = remove_polyfit_orders(wave_arr, 
+                                               spec_arr_masked, 
+                                               bins=bins, degree=degree)
+
+        k = degree + 1
+        n = len(spec_arr[0, :, 0])
+                    
+        bic_chi = bic_chi2(k, n, spec_arr_masked, poly_arr, sig_arr_masked)
+        
+        debug_print(verbose, f"degree {degree} bic_chi:", bic_chi)
+
+        # Element-wise comparison: where BIC improved
+        improved = bic_chi < bic_vals
+
+        # Update only improved indices
+        bic_vals[improved] = bic_chi[improved]
+        deg_vals[improved] = degree
+
+        gord, gobs = np.where(improved)
+
+        poly_arr_best[gord, :, gobs] = poly_arr[gord, :, gobs]
+        nopoly_arr_best[gord, :, gobs] = nopoly_arr[gord, :, gobs]
+        bin_midpts_arr_best[gord, :, gobs] = bin_midpts_arr[gord, :, gobs]
+        bin_meds_arr_best[gord, :, gobs] = bin_meds_arr[gord, :, gobs]
+        
+        # Mark indices where BIC didn't improve as converged
+        # (only if they weren't already marked converged)
+        newly_converged = (~improved) & (~converged_mask)
+        deg_vals[newly_converged] = degree - 1
+        
+        # If all indices have converged, exit early
+        if np.all(improved == False):
+            debug_print(verbose, f"All indices converged by degree {degree}")
+            break
+
+    return poly_arr_best, nopoly_arr_best, bin_midpts_arr_best, bin_meds_arr, bic_vals, deg_vals
+
 
 # ___LASER DETECTION___
 def simple_threshold(flux, coeff):
