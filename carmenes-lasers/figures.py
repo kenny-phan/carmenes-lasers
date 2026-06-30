@@ -143,3 +143,43 @@ def plot_bic_deg(bic_vals, deg_vals):
     plt.tight_layout()
 
     return fig, axes
+
+def plot_spectra_ords(wave_arr, data, obs_idx, poly=None, figsize=(15, 9)):
+    """
+    Plot all 60 orders for a single observation in a 6x10 grid.
+    
+    Parameters:
+    -----------
+    wave_arr : ndarray, shape (orders, wave_cols, observations)
+        Wavelength array
+    data : ndarray, shape (orders, wave_cols, observations)
+        Spectrum data to plot
+    obs_idx : int
+        Observation index to plot
+    figsize : tuple
+        Figure size (width, height)
+    """
+    fig, axes = plt.subplots(6, 10, figsize=figsize)
+    axes = axes.flatten()  # Flatten to 1D for easy iteration
+    
+    for order in range(60):
+        ax = axes[order]
+        
+        wave = wave_arr[order, :, obs_idx]
+        spec = data[order, :, obs_idx]
+        
+        ax.plot(wave, spec, label=f'Order {order}')
+
+        if poly_arr is not None:
+            poly = poly_arr[order, :, obs_idx]
+            ax.plot(wave, poly, label="Best Fit", zorder=5, linewidth=2)
+        # Axis labels only on outer edges
+        if order >= 50:  # Bottom row
+            ax.set_xlabel('Wavelength', fontsize=9)
+        if order % 10 == 0:  # Leftmost column
+            ax.set_ylabel('Flux', fontsize=9)
+        
+        ax.legend(fontsize=10, loc='best')
+
+    plt.tight_layout()
+    return fig, axes
