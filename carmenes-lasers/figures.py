@@ -66,7 +66,7 @@ def plot_spectra_obs(n_obs_range, wave_arr, spec_arr, sigma_arr, date_arr, ordid
 
     return fig, axs
 
-def compare_high_std_spectra(spec_arr, wave_arr, date_arr, high_std_mask, order_idx=None, obs_idx=None, verbose=False):
+def plot_high_std_compare(spec_arr, wave_arr, date_arr, high_std_mask, order_idx=None, obs_idx=None, verbose=False):
     # Find all flagged positions
     flagged_orders, flagged_obs = np.where(high_std_mask)
 
@@ -116,3 +116,30 @@ def compare_high_std_spectra(spec_arr, wave_arr, date_arr, high_std_mask, order_
     plt.tight_layout()
 
     return fig, ax
+
+def plot_bic_deg(bic_vals, deg_vals):
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    
+    # BIC values
+    im1 = axes[0].imshow(bic_vals, aspect='auto', norm=mpl.colors.LogNorm(vmax=np.percentile(bic_vals, 98)))
+    axes[0].set_title('BIC Values', fontsize=12)
+    axes[0].set_xlabel('Observations')
+    axes[0].set_ylabel('Orders')
+    cbar1 = plt.colorbar(im1, ax=axes[0])
+    cbar1.set_label('BIC')
+    
+    # Degree values
+    deg_vals = deg_vals.astype(int)
+    cmap = plt.get_cmap('viridis', np.max(deg_vals) - np.min(deg_vals) + 1)
+    im2 = axes[1].imshow(deg_vals, cmap=cmap, aspect='auto',
+                         vmin=np.min(deg_vals) - 0.5, 
+                         vmax=np.max(deg_vals) + 0.5)
+    axes[1].set_title('Best Polynomial Degree', fontsize=12)
+    axes[1].set_xlabel('Observations')
+    axes[1].set_ylabel('Orders')
+    cbar2 = plt.colorbar(im2, ax=axes[1], ticks=np.arange(np.min(deg_vals), np.max(deg_vals) + 1))
+    cbar2.set_label('Degree')
+    
+    plt.tight_layout()
+
+    return fig, axes
