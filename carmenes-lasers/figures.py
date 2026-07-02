@@ -20,10 +20,6 @@ plt.rcParams.update({'axes.linewidth' : 1.5,
                     })
 plt.style.use('tableau-colorblind10')
 tableau_cb10 = plt.rcParams['axes.prop_cycle'].by_key()['color'] 
-
-def debug_print(verbose, *args):
-    if verbose:
-        print(*args)
         
 def plot_spectra_elike(fig, axs, x, y, n_sections, title=None, xlabel=None, ylabel=None):
     x_sections = np.array_split(x, n_sections)
@@ -117,16 +113,41 @@ def plot_high_std_compare(spec_arr, wave_arr, date_arr, high_std_mask, order_idx
 
     return fig, ax
 
-def plot_bic_deg(bic_vals, deg_vals):
+def plot_bin_polyfit(new_wave_arr, 
+                     normalized_spec, 
+                     poly_arr_best, 
+                     bin_midpts_arr_best, 
+                     bin_meds_arr_best, 
+                     ordidx=0, obsidx=0):
+    
+    fig = plt.figure(figsize=(16, 6))
+    plt.plot(new_wave_arr[ordidx, :, obsidx], 
+             normalized_spec[ordidx, :, obsidx], 
+             label='raw data')
+    plt.plot(new_wave_arr[ordidx, :, obsidx], 
+             poly_arr_best[ordidx, :, obsidx], 
+             label="bin polyfit", 
+             linewidth=4)
+    plt.scatter(bin_midpts_arr_best[ordidx, :, obsidx], 
+                bin_meds_arr_best[ordidx, :, obsidx], 
+                label="bins", s=50, color="red", zorder=10)
+    
+    plt.xlabel("Angstroms")
+    plt.ylabel("Relative Flux")
+    plt.legend()
+    
+    return fig 
+
+def plot_bic_deg(crit_vals, deg_vals, criterion="BIC"):
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     
-    # BIC values
-    im1 = axes[0].imshow(bic_vals, aspect='auto', norm=mpl.colors.LogNorm(vmax=np.percentile(bic_vals, 98)))
-    axes[0].set_title('BIC Values', fontsize=12)
+    # crit values
+    im1 = axes[0].imshow(crit_vals, aspect='auto', norm=mpl.colors.LogNorm(vmax=np.percentile(crit_vals, 98)))
+    axes[0].set_title(f'{criterion} Values', fontsize=12)
     axes[0].set_xlabel('Observations')
     axes[0].set_ylabel('Orders')
     cbar1 = plt.colorbar(im1, ax=axes[0])
-    cbar1.set_label('BIC')
+    cbar1.set_label(criterion)
     
     # Degree values
     deg_vals = deg_vals.astype(int)
@@ -144,7 +165,7 @@ def plot_bic_deg(bic_vals, deg_vals):
 
     return fig, axes
 
-def plot_spectra_ords(wave_arr, data, obs_idx, poly=None, figsize=(15, 9)):
+def plot_spectra_ords(wave_arr, data, obs_idx=0, poly_arr=None, figsize=(15, 9)):
     """
     Plot all 60 orders for a single observation in a 6x10 grid.
     

@@ -1,3 +1,6 @@
+import os
+import warnings
+
 import astropy.units as u
 import numpy as np
 
@@ -8,7 +11,9 @@ from specutils import Spectrum
 from specutils.manipulation import FluxConservingResampler
 from tqdm import tqdm
 
-from figures import debug_print
+from load_data import debug_print
+
+warnings.filterwarnings('ignore')
 
 def check_spec_std(spec_arr, coeff=1):
     # Calculate std across wave_cols (axis 1) for all orders and observations
@@ -217,84 +222,179 @@ def remove_polyfit_orders(wave_arr, no_nan_spec_arr, bins=10, degree=4):
 
     return poly_arr, nopoly_arr, bin_midpts_arr, bin_meds_arr
 
-def chi2(x, mu, sig):
+def reduced_chi2(k, n, x, mu, sig):
+    dof = n - k
     unsummed = ((x - mu)/sig)**2
-    return np.sum(unsummed, axis=1)
+    return np.sum(unsummed, axis=1) / dof
 
 def bic_chi2(k, n, x, mu, sig):
     dof = n - k
-    reduced_chi2 = chi2(x, mu, sig) / dof
-    return k*np.log(n) + reduced_chi2
+    red_chi2 = reduced_chi2(k, n, x, mu, sig) 
+    return k*np.log(n) + red_chi2
+
+def aic_chi2(k, n, x, mu, sig):
+    dof = n - k
+    red_chi2 = reduced_chi2(k, n, x, mu, sig) 
+    return 2*k + red_chi2
+
+def hqc_chi2(k, n, x, mu, sig):
+    dof = n - k
+    red_chi2 = reduced_chi2(k, n, x, mu, sig) 
+    return 2*k*np.log(np.log(n)) + red_chi2
     
 def find_best_poly(wave_arr, spec_arr, sig_arr, 
-                   degrees=[1, 2, 3, 4, 5], 
-                   bins=25, base_bic=1e6, 
-                   verbose=False):
-
+                   degrees=np.arange(1, 10, 1),
+                    bins=25,
+                    base_bic=1e6, 
+                    criterion = "BIC",
+                    verbose=True):
+    """Finds best polynomial fit over all degrees until no orders, 
+    observations are improved. Could be sped up by implementing a 
+    mask for the first lowest BIC value, but that risks falling 
+    into a local minima"""
+    
+    # n = number of wave cols
+    n = len(spec_arr[0, :, 0])
+    
+    # instantiate empty arrays
     n_ords = spec_arr.shape[0]
     n_obs = spec_arr.shape[2] 
     
-    bic_vals = np.ones((n_ords, n_obs)) * base_bic
-    deg_vals = np.zeros((n_ords, n_obs))  
-
+    crit_vals = np.ones((n_ords, n_obs)) * base_bic # high bic so first go is an improvement
+    deg_vals = np.zeros((n_ords, n_obs)) # degree starts at 0
+    
     poly_arr_best = np.empty_like(spec_arr) 
     nopoly_arr_best = np.empty_like(spec_arr)
     bin_midpts_arr_best = np.empty((n_ords, bins, n_obs))
     bin_meds_arr_best = np.empty((n_ords, bins, n_obs))
-
+    
     for degree in degrees:
-        # Create mask: skip indices where best degree is 2+ below current
-        # This means BIC already got worse, won't improve at higher degrees
-        converged_mask = (deg_vals < degree - 1)
-
-        mask_ord, mask_obs = np.where(converged_mask)
-        spec_arr_masked = spec_arr.copy()
-        sig_arr_masked = sig_arr.copy()
+        print(f"processing degree {degree}")
+        k = degree + 1
         
-        # Use advanced indexing with full range for wavelengths
-        spec_arr_masked[mask_ord[:, np.newaxis], :, mask_obs[:, np.newaxis]] = 0
-        sig_arr_masked[mask_ord[:, np.newaxis], :, mask_obs[:, np.newaxis]] = np.inf
-
         (poly_arr, 
          nopoly_arr, 
          bin_midpts_arr, 
          bin_meds_arr) = remove_polyfit_orders(wave_arr, 
-                                               spec_arr_masked, 
+                                               spec_arr, 
                                                bins=bins, degree=degree)
-
-        k = degree + 1
-        n = len(spec_arr[0, :, 0])
-                    
-        bic_chi = bic_chi2(k, n, spec_arr_masked, poly_arr, sig_arr_masked)
+    
+        if criterion == "BIC":
+            crit = bic_chi2(k, n, spec_arr, poly_arr, sig_arr)
+        elif criterion == "AIC":
+            crit = aic_chi2(k, n, spec_arr, poly_arr, sig_arr)
+        elif criterion == "HQC":
+            crit = hqc_chi2(k, n, spec_arr, poly_arr, sig_arr)
+            
+        improved = crit < crit_vals
         
-        debug_print(verbose, f"degree {degree} bic_chi:", bic_chi)
-
-        # Element-wise comparison: where BIC improved
-        improved = bic_chi < bic_vals
-
         # Update only improved indices
-        bic_vals[improved] = bic_chi[improved]
+        crit_vals[improved] = crit[improved]
         deg_vals[improved] = degree
-
+    
         gord, gobs = np.where(improved)
-
+    
         poly_arr_best[gord, :, gobs] = poly_arr[gord, :, gobs]
         nopoly_arr_best[gord, :, gobs] = nopoly_arr[gord, :, gobs]
         bin_midpts_arr_best[gord, :, gobs] = bin_midpts_arr[gord, :, gobs]
         bin_meds_arr_best[gord, :, gobs] = bin_meds_arr[gord, :, gobs]
-        
-        # Mark indices where BIC didn't improve as converged
-        # (only if they weren't already marked converged)
-        newly_converged = (~improved) & (~converged_mask)
-        deg_vals[newly_converged] = degree - 1
-        
-        # If all indices have converged, exit early
+    
         if np.all(improved == False):
-            debug_print(verbose, f"All indices converged by degree {degree}")
+            debug_print(verbose, f"All indices converged by degree {degree - 1}")
             break
 
-    return poly_arr_best, nopoly_arr_best, bin_midpts_arr_best, bin_meds_arr, bic_vals, deg_vals
+    return poly_arr_best, nopoly_arr_best, bin_midpts_arr_best, bin_meds_arr_best, crit_vals, deg_vals
 
+# ___FULL RESAMPLE + FIT___
+    
+def resample_and_fit(wave_arr, 
+                    spec_arr, 
+                    sigma_arr,
+                    bary_corr_arr, 
+                    save_dir, 
+                    coeff=1,
+                    resampler="fcr",
+                    degrees=[1, 2, 3, 4, 5], 
+                    bins=25, 
+                    base_bic=1e6, 
+                    criterion="BIC",
+                    verbose=False):
+    
+    high_std_mask = check_spec_std(spec_arr, coeff=coeff)
+    shifted_wave_arr = ds_wave_cube(wave_arr, bary_corr_arr)
+
+    new_wave_path = save_dir + "/resampled_wave.npy"
+    new_spec_path = save_dir + "/resampled_spec.npy"
+    new_sig_path = save_dir + "/resampled_sig.npy"
+
+    resamples_exist = [os.path.exists(new_wave_path),
+                       os.path.exists(new_spec_path),
+                       os.path.exists(new_sig_path)
+                      ]
+
+    if np.all(resamples_exist):
+        debug_print(verbose, "resamples exist")
+        new_wave_arr = np.load(new_wave_path, allow_pickle=True)
+        new_spec_arr = np.load(new_spec_path, allow_pickle=True)
+        new_sig_arr = np.load(new_sig_path, allow_pickle=True)
+
+    else:
+        debug_print(verbose, "resampling to common grid...")
+        (new_wave_arr, 
+         new_spec_arr, 
+         new_sig_arr) = resample_ords(shifted_wave_arr, 
+                                      spec_arr, sigma_arr, 
+                                      resampler=resampler,
+                                      save_dir=save_dir)
+        
+    no_nan_spec_arr = replace_nan_with_median(new_spec_arr)
+    no_nan_sig_arr = replace_nan_with_median(new_sig_arr)
+
+    medians = np.median(no_nan_spec_arr, axis=1)
+    normalized_spec = no_nan_spec_arr / medians[:, np.newaxis, :]
+    normalized_sig = no_nan_sig_arr / medians[:, np.newaxis, :]
+
+    debug_print(verbose, f"finding best polynomial via {criterion}")
+    
+    (poly_arr_best, 
+     nopoly_arr_best, 
+     bin_midpts_arr_best, 
+     bin_meds_arr_best, 
+     crit_vals, 
+     deg_vals) = find_best_poly(new_wave_arr, 
+                                normalized_spec, 
+                                normalized_sig,
+                                degrees=degrees,
+                                bins=bins, 
+                                base_bic=base_bic,
+                                criterion=criterion,
+                                verbose=verbose)
+
+    results = [new_wave_arr,
+               normalized_spec, 
+               normalized_sig,
+               poly_arr_best, 
+               nopoly_arr_best, 
+               bin_midpts_arr_best, 
+               bin_meds_arr_best, 
+               crit_vals, 
+               deg_vals, 
+               high_std_mask
+    ]
+
+    np.savez_compressed(save_dir + '/results.npz',
+         new_wave_arr=new_wave_arr,
+         normalized_spec=normalized_spec,
+         normalized_sig=normalized_sig,
+         poly_arr_best=poly_arr_best,
+         nopoly_arr_best=nopoly_arr_best,
+         bin_midpts_arr_best=bin_midpts_arr_best,
+         bin_meds_arr_best=bin_meds_arr_best,
+         crit_vals=crit_vals,
+         deg_vals=deg_vals,
+         high_std_mask=high_std_mask)
+
+    return results
 
 # ___LASER DETECTION___
 def simple_threshold(flux, coeff):
