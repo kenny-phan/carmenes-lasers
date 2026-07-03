@@ -31,14 +31,17 @@ def load_fits(filname, print_header=False, print_flux_header=False):
         date = hdul[0].header['DATE-OBS']
         airm = hdul[0].header['AIRMASS']
         exptime = hdul[0].header['EXPTIME']
-        bary_corr = hdul[0].header['HIERARCH CARACAL HELCOR'] # km/s
-
-        # print(hdul[1].header)
-
-        # print(obj, ra, dec)
+        
+        try:
+            bary_corr = hdul[0].header['HIERARCH CARACAL HELCOR']  # km/s
+        except KeyError:
+            try:
+                bary_corr = hdul[0].header['HIERARCH CARACAL BERV']  # km/s (fallback)
+            except KeyError as e:
+                print(f"ERROR: No barycentric correction found in {filname}")
+                bary_corr = 0.0
 
     check_channel_sizes(spec, cont, sigma, wave)
-
 
     if print_header:
         print(hdul[0].header)
