@@ -1,13 +1,16 @@
 import numpy as np
 
 from astropy.modeling.models import Voigt1D
-from scipy import ndimage
+from lmfit.models import VoigtModel
+# from scipy import ndimage
 from scipy.signal import find_peaks
 
 from load_data import debug_print 
 
 # ___LASER DETECTION___
-
+def mse(obs, pred):
+    return np.sum((obs - pred)**2) / len(obs)
+    
 def med_abs_dev(x):
     med = np.nanmedian(x)
     abs_dev = np.abs(x - med)
@@ -23,11 +26,11 @@ def get_residual(spec_arr):
     
     return residual_arr
     
-def full_width_half_max(x, y, peakx, peaky, max_diff, verbose=False):
+def full_width_half_max(x, y, peakx, half_maxes, max_diff=0.01, verbose=False):
     fwhm_arr = []
     x_peaks = []
-    for i, peak in enumerate(peaky):
-        half_max = peak/2
+    for i, half_max in enumerate(half_maxes):
+        # half_max = peak/2
         center_freq = peakx[i]
 
         debug_print(verbose, "center freq", center_freq)
@@ -70,17 +73,16 @@ def spec_to_fwhms(wave, flux, poly, residual, coeff, max_diff=0.01, threshold_ty
         threshold = poly + coeff * med_abs_dev(residual)
 
     peaks, _ = find_peaks(flux, threshold) # get peaks above threshold 
-    wave_pks, flx_pks = wave[peaks], flux[peaks]
+        
+    wave_pks, flx_pks, poly_pks = wave[peaks], flux[peaks], poly[peaks]
+
+    half_maxes = poly_pks + 0.5*(flx_pks - poly_pks)
     
-    fwhms, x_peaks = full_width_half_max(wave, flux, wave_pks, flx_pks, max_diff, verbose=verbose) # fwhm of peaks
+    fwhms, x_peaks = full_width_half_max(wave, flux, wave_pks, half_maxes, max_diff, verbose=verbose) # fwhm of peaks
 
     return fwhms, x_peaks, threshold
 
-def lsf_per_wav(wave, wl,
-                amplitude_L=1, 
-                w_lorentz=np.array([0.28, 0.21, 0.17]) * 1e-5, 
-                w_gauss=np.array([1.0, 1.01, 1.18]) * 1e-5):
-    
+def check_windex(wl):
     if wl <= 6000:
         windex = 0
     elif (wl > 6000) and (wl <= 9600):
@@ -88,12 +90,32 @@ def lsf_per_wav(wave, wl,
     elif wl > 9600:
         windex = 2
 
-    v1 = Voigt1D(x_0=wl, 
-                 amplitude_L=amplitude_L, 
-                 fwhm_L=w_lorentz[windex]*wl, 
-                 fwhm_G=w_gauss[windex]*wl)
+    return windex
 
-    return v1(wave)
+def lsf_per_wav(wave, wl,
+                amplitude_L=1, 
+                w_lorentz=np.array([0.28, 0.21, 0.17]) * 1e-5, 
+                w_gauss=np.array([1.0, 1.01, 1.18]) * 1e-5,
+               model_type="astropy"):
+    
+    windex = check_windex(wl)
+
+    if model_type == "astropy":
+        v1 = Voigt1D(x_0=wl, 
+                     amplitude_L=amplitude_L, 
+                     fwhm_L=w_lorentz[windex]*wl, 
+                     fwhm_G=w_gauss[windex]*wl)
+
+        return v1(wave)
+        
+    if model_type == "lmfit":
+        model = VoigtModel()
+        v1 = model.eval(amplitude=amplitude_L, 
+                      center=wl, 
+                      sigma=w_gauss[windex]*wl, 
+                      gamma=w_lorentz[windex]*wl, 
+                      x=wave)
+        return v1
 
 # def identify_peaks(normalized_spec, poly_arr_best, n=3):
 #     """
@@ -142,7 +164,7 @@ def make_laser_arr(new_wave_arr,
                    poly_arr_best, 
                    wls=None, 
                    mult=1.5, 
-                   n=3, 
+                   n=3, model_type="astropy",
                    verbose=False):
     if wls is None:
         wls = np.arange(5200, 10400, 50)
@@ -164,10 +186,95 @@ def make_laser_arr(new_wave_arr,
                 wl_cols = new_wave_arr[order, :, obsidx]
                 col_idx = np.nanargmin(np.abs(wl_cols - wl))  # Closest column
                 
-                amplitude = (poly_arr_best[order, col_idx, obsidx]                             * mult)
+                amplitude = (poly_arr_best[order, col_idx, obsidx] 
+                             * mult)
                 
                 laser_arr[order, :, obsidx] += lsf_per_wav(wl_cols, 
                                                        wl,
-                                                       amplitude_L=amplitude)
+                                                       amplitude_L=amplitude,
+                                                       model_type=model_type)
     
     return laser_arr
+
+def fwhm_test(wave, x_peaks, method="pixel", px_min=None):
+    if method == "pixel":
+        # pixel - wavelength function to convert fwhm to pixels
+        pixels = np.arange(0, len(wave), 1)
+        fit_coeffs = np.polyfit(pixels, wave, 1)
+        wave_of_px = np.poly1d(fit_coeffs)
+        
+        fwhm_min = wave_of_px(px_min) - wave_of_px(0)
+
+        return fwhm_min
+
+    if method == "model":
+        unfilled_ranges = [True, True, True]
+        lsfs = np.ones((3, wave.shape[0]))
+        fwhm_lsfs = np.empty(3) 
+    
+        for wl in x_peaks:
+        
+            windex = check_windex(wl)
+        
+            if unfilled_ranges[windex]:
+                
+                lsfs[windex, :] = lsf_per_wav(wave, wl,
+                            amplitude_L=1)
+            
+                fwhm, _, _ = spec_to_fwhms(wave, lsfs[windex, :], 
+                                               np.zeros_like(wave), 
+                                               np.zeros_like(wave), 
+                                               0, max_diff=0.5)
+                fwhm_lsfs[windex] = fwhm[0]
+                
+                unfilled_ranges[windex] = False
+        
+            else:
+                continue
+
+        return fwhm_lsfs
+
+def extract_peaks_between_minima(wave, flux, sigma, center_wavelengths):
+    """
+    Extract peak regions bounded by local minima on both sides. 
+    THIS SHOULD BE SLOPE = 0 BUT OK FOR NOW
+    
+    Args:
+        wave: 1D wavelength array
+        flux: 1D flux array
+        center_wavelengths: 1D array or list of central wavelength peak locations (actual wavelength values)
+    
+    Returns:
+        peaks_list: list of tuples (wave_segment, flux_segment) for valid peaks
+        skipped_peaks: 1D array of central wavelengths where minima weren't found on both sides
+    """
+    peaks_list = []
+    skipped_peaks = []
+    
+    # Find all local minima in the spectrum (inverted flux)
+    minima_indices, _ = find_peaks(-flux)
+    minima_waves = wave[minima_indices]
+    
+    for center_wave in center_wavelengths:
+        # Find minima on the left and right of this peak
+        left_minima = minima_waves[minima_waves < center_wave]
+        right_minima = minima_waves[minima_waves > center_wave]
+        
+        # Check if both sides have a minimum
+        if len(left_minima) == 0 or len(right_minima) == 0:
+            skipped_peaks.append(center_wave)
+            continue
+        
+        # Get the closest minimum on each side
+        left_min_wave = left_minima[-1]  # rightmost of left minima
+        right_min_wave = right_minima[0]  # leftmost of right minima
+        
+        # Extract the segment (inclusive)
+        mask = (wave >= left_min_wave) & (wave <= right_min_wave)
+        wave_segment = wave[mask]
+        flux_segment = flux[mask]
+        sigma_segment = sigma[mask]
+        
+        peaks_list.append((wave_segment, flux_segment, sigma_segment))
+    
+    return peaks_list, np.array(skipped_peaks)
