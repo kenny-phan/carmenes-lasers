@@ -1,5 +1,9 @@
 import glob
+import csv
+
 import numpy as np
+import pandas as pd
+
 from astropy.io import fits
 
 def debug_print(verbose, *args):
@@ -103,5 +107,56 @@ def load_star(dirname, print_headers=False, print_flux_headers=False):
 
     return spec_arr, cont_arr, sigma_arr, wave_arr, obj_arr, ra_arr, dec_arr, date_arr, exptime_arr, airm_arr, bary_corr_arr
 
+def make_data_csv(data_root, stars_folder, 
+                  output_csv="star_data.csv", 
+                  save_dir=None,
+                  carmenes_links_csv=None):
+    
+    dir_list = glob.glob(data_root + stars_folder + "/*")
+    
+    # Load carmenes_dr1_links if provided
+    name_mapping = {}
+    if carmenes_links_csv:
+        links_df = pd.read_csv(carmenes_links_csv)
+        # Create a mapping from Karmn to Name
+        name_mapping = dict(zip(links_df['Karmn'], links_df['Name']))
+    
+    # Collect data
+    data = []
+    
+    for dir_path in dir_list: 
+        sci_list = glob.glob(dir_path + "/*sci*.fits")
+        n_obs = len(sci_list) 
+        
+        star_name = dir_path.split(stars_folder)[-1].rsplit('_', 1)[0]
+        
+        # Look up the common name
+        common_name = name_mapping.get(star_name, "")
+        
+        data.append({"Karmn": star_name, "Name": common_name, "n_obs": n_obs})
+    
+    # Write to 
+    if save_dir is not None:
+        savefil = save_dir + output_csv
+    else: 
+        savefil = output_csv
+        
+    with open(savefil, 'w', newline='') as csvfile:
+        fieldnames = ['Karmn', 'Name', 'n_obs']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        
+        writer.writeheader()
+        writer.writerows(data)
+    
+    print(f"Saved {len(data)} entries to {savefil}")
+
+    ## EXAMPLE USE
+#     make_data_csv(
+#     data_root="/datax/scratch/ktp/carmenes-lasers/spectra/",
+#     stars_folder="extracted/",
+#     output_csv="star_data.csv",
+#     save_dir="/datax/scratch/ktp/carmenes-lasers/summary/",
+#     carmenes_links_csv="/datax/scratch/ktp/carmenes-lasers/summary/carmenes_dr1_links.csv"
+# )
 
     
