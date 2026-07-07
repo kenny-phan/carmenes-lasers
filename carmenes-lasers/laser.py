@@ -7,40 +7,74 @@ from scipy.signal import find_peaks
 from load_data import debug_print 
 
 # ___LASER DETECTION___
-def simple_threshold(flux, coeff):
-    return np.nanmedian(flux) + coeff * np.nanstd(flux)
 
+def med_abs_dev(x):
+    med = np.nanmedian(x)
+    abs_dev = np.abs(x - med)
+    mad = np.nanmedian(abs_dev)
+    return mad
+
+def get_residual(spec_arr):
+    """Subtract median spectrum from each observation"""
+    median_obs = np.nanmedian(spec_arr, axis=2)  # Shape: (ords, wave_cols)
+    
+    # Broadcasting: (ords, wave_cols, obs) - (ords, wave_cols, 1)
+    residual_arr = spec_arr - median_obs[:, :, np.newaxis]
+    
+    return residual_arr
+    
 def full_width_half_max(x, y, peakx, peaky, max_diff, verbose=False):
     fwhm_arr = []
+    x_peaks = []
     for i, peak in enumerate(peaky):
         half_max = peak/2
         center_freq = peakx[i]
 
         debug_print(verbose, "center freq", center_freq)
+
         x_args = np.where(np.abs(y - half_max) < max_diff)
         x_vals = x[x_args]
-        # print("x vals", x_vals)
-        debug_print(verbose, f"There are {len(x_vals)} intersections between the spectrum and half max of this peak.")
-        lower_freq_arg = np.argmin(np.abs(center_freq - x_vals[x_vals < center_freq]))
-        upper_freq_arg = np.argmin(np.abs(center_freq - x_vals[x_vals > center_freq]))
 
-        lower_freq = x_vals[x_vals < center_freq][lower_freq_arg]
-        upper_freq = x_vals[x_vals > center_freq][upper_freq_arg]
-        debug_print(verbose, "lower, upper freqs", lower_freq, upper_freq)
-        fwhm = upper_freq - lower_freq
-        fwhm_arr.append(fwhm)
+        debug_print(verbose, 
+                    f"{len(x_vals)} intersections between the spectrum and half max of this peak.")
+
+        lower_mask = (x_vals < center_freq)
+        upper_mask = (x_vals > center_freq)
+
+        if np.any(lower_mask == True) and np.any(upper_mask == True):
+            lower_freq_arg = np.argmin(np.abs(center_freq - x_vals[lower_mask]))
+            upper_freq_arg = np.argmin(np.abs(center_freq - x_vals[upper_mask]))
+    
+            lower_freq = x_vals[lower_mask][lower_freq_arg]
+            upper_freq = x_vals[upper_mask][upper_freq_arg]
+            debug_print(verbose, "lower, upper freqs", lower_freq, upper_freq)
+            fwhm = upper_freq - lower_freq
+            fwhm_arr.append(fwhm)
+            x_peaks.append(center_freq)
+            
+        elif np.all(lower_mask == False):
+            debug_print(verbose, f"peak at {np.round(center_freq,2)} is at the lower edge")
+            continue 
+            
+        elif np.all(upper_mask == False):
+            debug_print(verbose, f"peak at {np.round(center_freq,2)} is at the upper edge")
+            continue 
         
-    return np.array(fwhm_arr)
+    return np.array(fwhm_arr), np.array(x_peaks)
 
-def spec_to_fwhms(spec, flux, sigma, max_diff=0.01, verbose=False):
-    threshold = simple_threshold(flux, sigma) # get the std threshold
+def spec_to_fwhms(wave, flux, poly, residual, coeff, max_diff=0.01, threshold_type="mad", verbose=False):
+    
+    if threshold_type == "std":
+        threshold = poly + coeff * np.nanstd(residual) 
+    elif threshold_type == "mad":
+        threshold = poly + coeff * med_abs_dev(residual)
 
     peaks, _ = find_peaks(flux, threshold) # get peaks above threshold 
-    spec_pks, flx_pks = spec[peaks], flux[peaks]
+    wave_pks, flx_pks = wave[peaks], flux[peaks]
     
-    fwhms = full_width_half_max(spec, flux, spec_pks, flx_pks, max_diff, verbose=verbose) # fwhm of peaks
+    fwhms, x_peaks = full_width_half_max(wave, flux, wave_pks, flx_pks, max_diff, verbose=verbose) # fwhm of peaks
 
-    return fwhms
+    return fwhms, x_peaks, threshold
 
 def lsf_per_wav(wave, wl,
                 amplitude_L=1, 
@@ -61,47 +95,47 @@ def lsf_per_wav(wave, wl,
 
     return v1(wave)
 
-def identify_peaks(normalized_spec, poly_arr_best, n=3):
-    """
-    Adapted from Tellis & Marcy 2017, Sec. 3 
-    """
-    num_orders = normalized_spec.shape[0]
-    num_obs = normalized_spec.shape[2]
+# def identify_peaks(normalized_spec, poly_arr_best, n=3):
+#     """
+#     Adapted from Tellis & Marcy 2017, Sec. 3 
+#     """
+#     num_orders = normalized_spec.shape[0]
+#     num_obs = normalized_spec.shape[2]
     
-    sub_arr = normalized_spec - poly_arr_best
+#     sub_arr = normalized_spec - poly_arr_best
     
-    positive_sub_arr = np.copy(sub_arr)
-    positive_sub_arr[positive_sub_arr < 0] = np.nan
+#     positive_sub_arr = np.copy(sub_arr)
+#     positive_sub_arr[positive_sub_arr < 0] = np.nan
     
-    positive_sub_arr_filtered = np.copy(positive_sub_arr)
-    medians_dict = {}  # Store medians indexed by (order, obs, group_id)
+#     positive_sub_arr_filtered = np.copy(positive_sub_arr)
+#     medians_dict = {}  # Store medians indexed by (order, obs, group_id)
 
-    median_of_medians = np.full((num_orders, num_obs), np.nan)
+#     median_of_medians = np.full((num_orders, num_obs), np.nan)
     
-    for order in range(num_orders):
-        for obs in range(num_obs):
-            spectrum = positive_sub_arr_filtered[order, :, obs]
-            labeled, num_f = ndimage.label(~np.isnan(spectrum))
+#     for order in range(num_orders):
+#         for obs in range(num_obs):
+#             spectrum = positive_sub_arr_filtered[order, :, obs]
+#             labeled, num_f = ndimage.label(~np.isnan(spectrum))
             
-            if num_f > 0:
-                sizes = np.bincount(labeled)[1:]  # Skip background (0)
-                valid = np.where(sizes > n)[0] + 1
+#             if num_f > 0:
+#                 sizes = np.bincount(labeled)[1:]  # Skip background (0)
+#                 valid = np.where(sizes > n)[0] + 1
                 
-                # Calculate median for each valid group
-                for group_id in valid:
-                    group_pixels = spectrum[labeled == group_id]
-                    group_median = np.nanmedian(group_pixels)
-                    medians_dict[(order, group_id, obs)] = group_median
+#                 # Calculate median for each valid group
+#                 for group_id in valid:
+#                     group_pixels = spectrum[labeled == group_id]
+#                     group_median = np.nanmedian(group_pixels)
+#                     medians_dict[(order, group_id, obs)] = group_median
                 
-                # Set invalid groups to NaN
-                positive_sub_arr_filtered[order, :, obs][~np.isin(labeled, valid)] = np.nan
-                medians_for_pair = [v for (o, g, ob), v in medians_dict.items() 
-                           if o == order and ob == obs]
+#                 # Set invalid groups to NaN
+#                 positive_sub_arr_filtered[order, :, obs][~np.isin(labeled, valid)] = np.nan
+#                 medians_for_pair = [v for (o, g, ob), v in medians_dict.items() 
+#                            if o == order and ob == obs]
 
-                if medians_for_pair:
-                    median_of_medians[order, obs] = np.median(medians_for_pair)
+#                 if medians_for_pair:
+#                     median_of_medians[order, obs] = np.median(medians_for_pair)
 
-    return positive_sub_arr_filtered, median_of_medians
+#     return positive_sub_arr_filtered, median_of_medians
 
 def make_laser_arr(new_wave_arr, 
                    normalized_spec,
@@ -115,8 +149,6 @@ def make_laser_arr(new_wave_arr,
     
     n_ords, n_cols, n_obs = new_wave_arr.shape
     laser_arr = np.zeros((n_ords, n_cols, n_obs))
-
-    _, median_of_medians = identify_peaks(normalized_spec, poly_arr_best, n=n)
     
     for wl in wls:
         # Find which orders contain this wavelength
@@ -132,7 +164,8 @@ def make_laser_arr(new_wave_arr,
                 wl_cols = new_wave_arr[order, :, obsidx]
                 col_idx = np.nanargmin(np.abs(wl_cols - wl))  # Closest column
                 
-                amplitude = poly_arr_best[order, col_idx, obsidx] + median_of_medians[order, obsidx] * mult
+                amplitude = (poly_arr_best[order, col_idx, obsidx]                             * mult)
+                
                 laser_arr[order, :, obsidx] += lsf_per_wav(wl_cols, 
                                                        wl,
                                                        amplitude_L=amplitude)
