@@ -4,10 +4,13 @@ from astropy.modeling.models import Voigt1D
 from lmfit.models import VoigtModel
 # from scipy import ndimage
 from scipy.signal import find_peaks
+from tqdm import tqdm
 
 from load_data import debug_print 
 
 # ___LASER DETECTION___
+
+# formulas
 def mse(obs, pred):
     return np.sum((obs - pred)**2) / len(obs)
     
@@ -16,6 +19,17 @@ def med_abs_dev(x):
     abs_dev = np.abs(x - med)
     mad = np.nanmedian(abs_dev)
     return mad
+
+def fwhm_voigt_to_gauss(f_V, method="kol"):
+    """
+    Assumes FWHM same for Lorentz and Gauss
+    Kielkopf and Olivero and Longbothum 
+    """
+    if method == "whiting":
+        f_L = f_V / (0.5 + np.sqrt(5/4))
+    if method == "kol":
+        f_L = f_V / (0.5343 + np.sqrt(1.2169)) 
+    return f_L
 
 def get_residual(spec_arr):
     """Subtract median spectrum from each observation"""
@@ -29,6 +43,8 @@ def get_residual(spec_arr):
 def full_width_half_max(x, y, peakx, half_maxes, max_diff=0.01, verbose=False):
     fwhm_arr = []
     x_peaks = []
+    valid_mask = np.zeros(len(half_maxes), dtype=bool)  # True = peak passed, False = excluded
+    
     for i, half_max in enumerate(half_maxes):
         # half_max = peak/2
         center_freq = peakx[i]
@@ -54,6 +70,7 @@ def full_width_half_max(x, y, peakx, half_maxes, max_diff=0.01, verbose=False):
             fwhm = upper_freq - lower_freq
             fwhm_arr.append(fwhm)
             x_peaks.append(center_freq)
+            valid_mask[i] = True  # Mark this index as valid
             
         elif np.all(lower_mask == False):
             debug_print(verbose, f"peak at {np.round(center_freq,2)} is at the lower edge")
@@ -63,10 +80,23 @@ def full_width_half_max(x, y, peakx, half_maxes, max_diff=0.01, verbose=False):
             debug_print(verbose, f"peak at {np.round(center_freq,2)} is at the upper edge")
             continue 
         
-    return np.array(fwhm_arr), np.array(x_peaks)
-
-def spec_to_fwhms(wave, flux, poly, residual, coeff, max_diff=0.01, threshold_type="mad", verbose=False):
+    return np.array(fwhm_arr), np.array(x_peaks), valid_mask
     
+
+def wave_to_fwhms(wave, flux, poly, 
+                  residual, coeff, 
+                  max_diff=0.01, 
+                  threshold_type="mad", interp_samples=None,
+                  verbose=False):
+
+    if interp_samples is not None:
+        interp_wave = np.linspace(wave[0], wave[-1], num=interp_samples)
+        flux = np.interp(interp_wave, wave, flux)
+        poly = np.interp(interp_wave, wave, poly)
+        residual = np.interp(interp_wave, wave, residual)
+
+        wave = interp_wave
+        
     if threshold_type == "std":
         threshold = poly + coeff * np.nanstd(residual) 
     elif threshold_type == "mad":
@@ -78,9 +108,13 @@ def spec_to_fwhms(wave, flux, poly, residual, coeff, max_diff=0.01, threshold_ty
 
     half_maxes = poly_pks + 0.5*(flx_pks - poly_pks)
     
-    fwhms, x_peaks = full_width_half_max(wave, flux, wave_pks, half_maxes, max_diff, verbose=verbose) # fwhm of peaks
+    fwhms, x_peaks, valid_mask = full_width_half_max(wave, flux, 
+                                         wave_pks, half_maxes, 
+                                         max_diff, verbose=verbose) # fwhm of peaks
 
-    return fwhms, x_peaks, threshold
+    return (fwhms, x_peaks, half_maxes[valid_mask], 
+            flx_pks[valid_mask], threshold, 
+            wave, flux, poly, residual)
 
 def check_windex(wl):
     if wl <= 6000:
@@ -92,19 +126,30 @@ def check_windex(wl):
 
     return windex
 
+
 def lsf_per_wav(wave, wl,
                 amplitude_L=1, 
                 w_lorentz=np.array([0.28, 0.21, 0.17]) * 1e-5, 
                 w_gauss=np.array([1.0, 1.01, 1.18]) * 1e-5,
-               model_type="astropy"):
+                broaden_coeff=1,
+                set_fwhm=None,
+               model_type="astropy", **kwargs):
     
     windex = check_windex(wl)
 
+    if set_fwhm is not None:
+        gauss_fwhm = fwhm_voigt_to_gauss(set_fwhm)
+        fwhm_G = [gauss_fwhm, gauss_fwhm, gauss_fwhm]
+        fwhm_L = fwhm_G
+    else: 
+        fwhm_G = w_gauss[windex]*wl
+        fwhm_L = w_lorentz[windex]*wl
+        
     if model_type == "astropy":
         v1 = Voigt1D(x_0=wl, 
                      amplitude_L=amplitude_L, 
-                     fwhm_L=w_lorentz[windex]*wl, 
-                     fwhm_G=w_gauss[windex]*wl)
+                     fwhm_L=fwhm_L*broaden_coeff, 
+                     fwhm_G=fwhm_G*broaden_coeff)
 
         return v1(wave)
         
@@ -112,8 +157,8 @@ def lsf_per_wav(wave, wl,
         model = VoigtModel()
         v1 = model.eval(amplitude=amplitude_L, 
                       center=wl, 
-                      sigma=w_gauss[windex]*wl, 
-                      gamma=w_lorentz[windex]*wl, 
+                      sigma=fwhm_G*broaden_coeff, 
+                      gamma=fwhm_L*wl*broaden_coeff, 
                       x=wave)
         return v1
 
@@ -164,7 +209,8 @@ def make_laser_arr(new_wave_arr,
                    poly_arr_best, 
                    wls=None, 
                    mult=1.5, 
-                   n=3, model_type="astropy",
+                   n=3, broaden_coeff=1,
+                   model_type="astropy",
                    verbose=False):
     if wls is None:
         wls = np.arange(5200, 10400, 50)
@@ -192,11 +238,14 @@ def make_laser_arr(new_wave_arr,
                 laser_arr[order, :, obsidx] += lsf_per_wav(wl_cols, 
                                                        wl,
                                                        amplitude_L=amplitude,
+                                                       broaden_coeff=broaden_coeff,
                                                        model_type=model_type)
     
     return laser_arr
 
-def fwhm_test(wave, x_peaks, method="pixel", px_min=None):
+def fwhm_test(wave, x_peaks, method="pixel", px_min=None, amplitude_L=1, 
+                broaden_coeff=1, model_type="astropy"):
+    
     if method == "pixel":
         # pixel - wavelength function to convert fwhm to pixels
         pixels = np.arange(0, len(wave), 1)
@@ -219,12 +268,13 @@ def fwhm_test(wave, x_peaks, method="pixel", px_min=None):
             if unfilled_ranges[windex]:
                 
                 lsfs[windex, :] = lsf_per_wav(wave, wl,
-                            amplitude_L=1)
+                            amplitude_L=amplitude_L, broaden_coeff=broaden_coeff)
             
-                fwhm, _, _ = spec_to_fwhms(wave, lsfs[windex, :], 
+                fwhm, _, _, _, _, _, _, _, _ = wave_to_fwhms(wave, lsfs[windex, :], 
                                                np.zeros_like(wave), 
                                                np.zeros_like(wave), 
                                                0, max_diff=0.5)
+            
                 fwhm_lsfs[windex] = fwhm[0]
                 
                 unfilled_ranges[windex] = False
@@ -278,3 +328,100 @@ def extract_peaks_between_minima(wave, flux, sigma, center_wavelengths):
         peaks_list.append((wave_segment, flux_segment, sigma_segment))
     
     return peaks_list, np.array(skipped_peaks)
+
+def get_x_peaks_arr(new_wave_arr,
+                   injected_laser,
+                   poly_arr_best,
+                   residual_arr, 
+                   normalized_sig,
+                   coeff, **kwargs):
+
+    max_diff = kwargs.get('max_diff', 0.01)
+    threshold_type = kwargs.get('threshold_type', 'std')
+    interp_samples = kwargs.get('interp_samples', None)
+    verbose = kwargs.get('verbose', False)
+    
+    norders = new_wave_arr.shape[0]
+    nobs = new_wave_arr.shape[2]
+
+    x_peaks_arr = np.empty((norders, nobs), dtype=object)
+    for ordidx in range(norders):
+        for obsidx in range(nobs):
+            wave = new_wave_arr[ordidx, :, obsidx]
+            flux = injected_laser[ordidx, :, obsidx]
+            poly = poly_arr_best[ordidx, :, obsidx]
+            residual = residual_arr[ordidx, :, obsidx]
+            sigma = normalized_sig[ordidx, :, obsidx]
+    
+            (fwhms, x_peaks, half_maxes, 
+            flx_pks, threshold, 
+            wave, flux, poly, residual) = wave_to_fwhms(wave, 
+                                                       flux, 
+                                                       poly,
+                                                       residual,
+                                                       coeff, 
+                                                       max_diff=max_diff, 
+                                                       threshold_type=threshold_type, 
+                                                       interp_samples=interp_samples, 
+                                                       verbose=verbose)
+
+            wl_min = fwhm_test(wave, x_peaks, method="pixel", px_min=2.5)
+    
+            filtered_x_peaks = x_peaks[fwhms > wl_min]
+    
+            x_peaks_arr[ordidx, obsidx] = filtered_x_peaks
+    
+    all_x_peaks_arr = np.concatenate([x for x in x_peaks_arr.flatten() if x.size > 0])
+
+    return all_x_peaks_arr
+
+# default args above
+# 1-10s runtime
+def get_fwhm_arr(new_wave_arr, flux_arr, 
+                 poly_arr_best, residual_arr, 
+                 normalized_sig, coeff, **kwargs):
+
+    max_diff = kwargs.get('max_diff', 0.01)
+    threshold_type = kwargs.get('threshold_type', 'std')
+    interp_samples = kwargs.get('interp_samples', None)
+    verbose = kwargs.get('verbose', False)
+    
+    norders = new_wave_arr.shape[0]
+    nobs = new_wave_arr.shape[2]
+    
+    fwhm_arr = np.empty((norders, nobs), dtype=object)
+    
+    for ordidx in tqdm(range(norders)):
+        for obsidx in range(nobs):
+            wave = new_wave_arr[ordidx, :, obsidx]
+            flux = flux_arr[ordidx, :, obsidx]
+            poly = poly_arr_best[ordidx, :, obsidx]
+            residual = residual_arr[ordidx, :, obsidx]
+            sigma = normalized_sig[ordidx, :, obsidx]
+            
+            (fwhms, x_peaks, half_maxes, 
+            flx_pks, threshold, 
+            wave, flux, poly, residual) = wave_to_fwhms(wave, 
+                                                   flux, 
+                                                   poly,
+                                                   residual,
+                                                   coeff, 
+                                                   max_diff=max_diff, 
+                                                   threshold_type=threshold_type, 
+                                                   interp_samples=interp_samples, 
+                                                   verbose=verbose)
+            
+            # Store as dictionary
+            fwhm_arr[ordidx, obsidx] = {
+                'fwhms': fwhms,
+                'x_peaks': x_peaks,
+                'half_maxes': half_maxes,
+                'flx_pks': flx_pks,
+                'threshold': threshold,
+                'wave': wave, 
+                'flux':flux,
+                'poly': poly,
+                'residual': residual
+            }
+
+    return fwhm_arr
