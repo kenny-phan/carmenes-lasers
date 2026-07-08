@@ -133,14 +133,14 @@ def lsf_per_wav(wave, wl,
                 w_gauss=np.array([1.0, 1.01, 1.18]) * 1e-5,
                 broaden_coeff=1,
                 set_fwhm=None,
-               model_type="astropy", **kwargs):
+               model_type="astropy"):
     
     windex = check_windex(wl)
 
     if set_fwhm is not None:
         gauss_fwhm = fwhm_voigt_to_gauss(set_fwhm)
-        fwhm_G = [gauss_fwhm, gauss_fwhm, gauss_fwhm]
-        fwhm_L = fwhm_G
+        fwhm_G = gauss_fwhm
+        fwhm_L = gauss_fwhm
     else: 
         fwhm_G = w_gauss[windex]*wl
         fwhm_L = w_lorentz[windex]*wl
@@ -211,6 +211,7 @@ def make_laser_arr(new_wave_arr,
                    mult=1.5, 
                    n=3, broaden_coeff=1,
                    model_type="astropy",
+                   set_fwhm_px=None,
                    verbose=False):
     if wls is None:
         wls = np.arange(5200, 10400, 50)
@@ -229,16 +230,26 @@ def make_laser_arr(new_wave_arr,
         for order in orders:
             for obsidx in range(n_obs):
                 # Find column index closest to target wavelength in this order/obs
-                wl_cols = new_wave_arr[order, :, obsidx]
-                col_idx = np.nanargmin(np.abs(wl_cols - wl))  # Closest column
+                wave = new_wave_arr[order, :, obsidx]
+                col_idx = np.nanargmin(np.abs(wave - wl))  # Closest column
                 
                 amplitude = (poly_arr_best[order, col_idx, obsidx] 
                              * mult)
-                
-                laser_arr[order, :, obsidx] += lsf_per_wav(wl_cols, 
+
+                if set_fwhm_px is not None:
+                    pixels = np.linspace(0, len(wave), len(wave))
+                    wave_of_px = np.polyfit(pixels, wave, 1)
+                    g = np.poly1d(wave_of_px)
+
+                    half_width = set_fwhm_px / 2
+
+                    set_fwhm = g(col_idx + half_width) - g(col_idx - half_width)
+                    
+                laser_arr[order, :, obsidx] += lsf_per_wav(wave, 
                                                        wl,
                                                        amplitude_L=amplitude,
                                                        broaden_coeff=broaden_coeff,
+                                                       set_fwhm=set_fwhm,
                                                        model_type=model_type)
     
     return laser_arr
