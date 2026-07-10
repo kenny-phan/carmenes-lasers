@@ -340,51 +340,51 @@ def extract_peaks_between_minima(wave, flux, sigma, center_wavelengths):
     
     return peaks_list, np.array(skipped_peaks)
 
-def get_x_peaks_arr(new_wave_arr,
-                   injected_laser,
-                   poly_arr_best,
-                   residual_arr, 
-                   normalized_sig,
-                   coeff, **kwargs):
+# def get_x_peaks_arr(new_wave_arr,
+#                    injected_laser,
+#                    poly_arr_best,
+#                    residual_arr, 
+#                    normalized_sig,
+#                    coeff, **kwargs):
 
-    max_diff = kwargs.get('max_diff', 0.01)
-    threshold_type = kwargs.get('threshold_type', 'std')
-    interp_samples = kwargs.get('interp_samples', None)
-    verbose = kwargs.get('verbose', False)
+#     max_diff = kwargs.get('max_diff', 0.01)
+#     threshold_type = kwargs.get('threshold_type', 'std')
+#     interp_samples = kwargs.get('interp_samples', None)
+#     verbose = kwargs.get('verbose', False)
     
-    norders = new_wave_arr.shape[0]
-    nobs = new_wave_arr.shape[2]
+#     norders = new_wave_arr.shape[0]
+#     nobs = new_wave_arr.shape[2]
 
-    x_peaks_arr = np.empty((norders, nobs), dtype=object)
-    for ordidx in range(norders):
-        for obsidx in range(nobs):
-            wave = new_wave_arr[ordidx, :, obsidx]
-            flux = injected_laser[ordidx, :, obsidx]
-            poly = poly_arr_best[ordidx, :, obsidx]
-            residual = residual_arr[ordidx, :, obsidx]
-            sigma = normalized_sig[ordidx, :, obsidx]
+#     x_peaks_arr = np.empty((norders, nobs), dtype=object)
+#     for ordidx in range(norders):
+#         for obsidx in range(nobs):
+#             wave = new_wave_arr[ordidx, :, obsidx]
+#             flux = injected_laser[ordidx, :, obsidx]
+#             poly = poly_arr_best[ordidx, :, obsidx]
+#             residual = residual_arr[ordidx, :, obsidx]
+#             sigma = normalized_sig[ordidx, :, obsidx]
     
-            (fwhms, x_peaks, half_maxes, 
-            flx_pks, threshold, 
-            wave, flux, poly, residual) = wave_to_fwhms(wave, 
-                                                       flux, 
-                                                       poly,
-                                                       residual,
-                                                       coeff, 
-                                                       max_diff=max_diff, 
-                                                       threshold_type=threshold_type, 
-                                                       interp_samples=interp_samples, 
-                                                       verbose=verbose)
+#             (fwhms, x_peaks, half_maxes, 
+#             flx_pks, threshold, 
+#             wave, flux, poly, residual) = wave_to_fwhms(wave, 
+#                                                        flux, 
+#                                                        poly,
+#                                                        residual,
+#                                                        coeff, 
+#                                                        max_diff=max_diff, 
+#                                                        threshold_type=threshold_type, 
+#                                                        interp_samples=interp_samples, 
+#                                                        verbose=verbose)
 
-            wl_min = fwhm_test(wave, x_peaks, method="pixel", px_min=2.5)
+#             wl_min = fwhm_test(wave, x_peaks, method="pixel", px_min=2.5)
     
-            filtered_x_peaks = x_peaks[fwhms > wl_min]
+#             filtered_x_peaks = x_peaks[fwhms > wl_min]
     
-            x_peaks_arr[ordidx, obsidx] = filtered_x_peaks
+#             x_peaks_arr[ordidx, obsidx] = filtered_x_peaks
     
-    all_x_peaks_arr = np.concatenate([x for x in x_peaks_arr.flatten() if x.size > 0])
+#     all_x_peaks_arr = np.concatenate([x for x in x_peaks_arr.flatten() if x.size > 0])
 
-    return all_x_peaks_arr
+#     return all_x_peaks_arr
 
 # default args above
 # 1-10s runtime
@@ -436,3 +436,39 @@ def get_fwhm_arr(new_wave_arr, flux_arr,
             }
 
     return fwhm_arr
+
+
+def recovery_rate(fwhm_arr, tolerances=None,
+                  wls=None, x_peaks_key='x_peaks'):
+
+    if wls is None:
+        wls = np.arange(5200, 10400, 50)
+    if tolerances is None:
+        tolerances = np.logspace(-4, 0)
+        
+    all_x_peaks_arr = np.concatenate([fwhm_arr[order, ordidx][x_peaks_key] 
+                            for order in range(fwhm_arr.shape[0]) 
+                            for ordidx in range(fwhm_arr.shape[1])])
+    
+    recovereds = []
+    for tolerance in tqdm(tolerances):
+        matched_fwhms = []
+        for target_wl in wls:
+            # Find FWHMs within tolerance
+            mask = np.abs(all_x_peaks_arr - target_wl) <= tolerance
+            if np.any(mask):
+                # Pick closest among valid candidates
+                valid_indices = np.where(mask)[0]
+                closest_idx = valid_indices[np.argmin(np.abs(all_x_peaks_arr[valid_indices] - target_wl))]
+                matched_fwhms.append(all_x_peaks_arr[closest_idx])
+            else:
+                matched_fwhms.append(np.nan)  # No match within tolerance
+        
+        matched_fwhms = np.array(matched_fwhms)
+        n_recovered = len(matched_fwhms[~np.isnan(matched_fwhms)])
+        recovereds.append(n_recovered)
+    
+    recovereds = np.array(recovereds)
+    recovered_percentage = 100*recovereds / len(wls)
+    
+    return tolerances, recovered_percentage
