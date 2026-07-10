@@ -358,7 +358,7 @@ def get_fwhm_arr(new_wave_arr, flux_arr,
     
     fwhm_arr = np.empty((norders, nobs), dtype=object)
     
-    for ordidx in tqdm(range(norders)):
+    for ordidx in range(norders):
         for obsidx in range(nobs):
             wave = new_wave_arr[ordidx, :, obsidx]
             flux = flux_arr[ordidx, :, obsidx]
@@ -415,7 +415,7 @@ def recovery_rate(fwhm_arr, tolerances=None,
                             for ordidx in range(fwhm_arr.shape[1])])
     
     recovereds = []
-    for tolerance in tqdm(tolerances):
+    for tolerance in tolerances:
         matched_fwhms = []
         for target_wl in wls:
             # Find FWHMs within tolerance
@@ -436,3 +436,57 @@ def recovery_rate(fwhm_arr, tolerances=None,
     recovered_percentage = 100*recovereds / len(wls)
     
     return tolerances, recovered_percentage
+
+
+def sample_recovery_rate(new_wave_arr, 
+                         normalized_spec, 
+                         poly_arr_best, 
+                         residual_arr, 
+                         normalized_sig, 
+                         coeff,
+                         n_runs=100, 
+                         wls=None, **kwargs):
+
+    mult = kwargs.get('mult', 1.5)
+    broaden_coeff = kwargs.get('broaden_coeff', 1)
+    set_fwhm_px = kwargs.get('set_fwhm_px', 2.5)
+    model_type = kwargs.get('model_type', 'astropy')
+
+    max_diff = kwargs.get('max_diff', 0.1)
+    threshold_type = kwargs.get('threshold_type', 'mad')
+    interp_samples = kwargs.get('interp_samples', 50000)
+
+    recovered_percentage_arr, recovered_percentage_pass_arr = [], []
+    
+    for run in tqdm(range(n_runs)):
+        if wls is None:
+            wls = np.random.uniform(low=5200, high=10400, size=(50,))
+    
+        laser_arr = make_laser_arr(new_wave_arr, normalized_spec, poly_arr_best, 
+                               mult=mult, broaden_coeff=broaden_coeff, 
+                                   set_fwhm_px=set_fwhm_px, wls=wls,
+                               model_type=model_type)
+        
+        normalized_laser_arr = laser_arr / poly_arr_best
+        
+        fwhm_arr = get_fwhm_arr(new_wave_arr, normalized_laser_arr, 
+                         poly_arr_best, residual_arr, 
+                         normalized_sig, coeff, max_diff=max_diff, 
+                        threshold_type=threshold_type,
+                        interp_samples=interp_samples)
+    
+        tolerances, recovered_percentage = recovery_rate(fwhm_arr, 
+                                                         wls=wls, 
+                                                         x_peaks_key='x_peaks')
+        (tolerances, 
+         recovered_percentage_pass) = recovery_rate(fwhm_arr, 
+                                               wls=wls,
+                                              x_peaks_key="x_test_pass")
+    
+        recovered_percentage_arr.append(recovered_percentage)
+        recovered_percentage_pass_arr.append(recovered_percentage_pass)
+        
+    recovered_percentage_arr = np.array(recovered_percentage_arr)
+    recovered_percentage_pass_arr = np.array(recovered_percentage_pass_arr)
+
+    return tolerances, recovered_percentage_arr, recovered_percentage_pass_arr

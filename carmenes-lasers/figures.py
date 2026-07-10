@@ -268,8 +268,12 @@ def plot_spectra_ords_peaks(fwhm_arr, obs_idx=0, figsize=(36, 20), style=tableau
     return fig, axes
 
 def plot_recovery_rate(tolerances, recovered_percentage, recovered_percentage_pass):
-    plt.plot(tolerances, recovered_percentage, label="All Injected Peaks")
-    plt.plot(tolerances, recovered_percentage_pass, label="> LSF FWHM")
+
+    rp_max = recovered_percentage[-1]
+    rpp_max = recovered_percentage_pass[-1]
+    
+    plt.plot(tolerances, recovered_percentage, label=f"All Injected Peaks: {np.round(rp_max, 2)}%")
+    plt.plot(tolerances, recovered_percentage_pass, label=f"> LSF FWHM: {np.round(rpp_max, 2)}%")
     plt.xscale("log")
     plt.grid()
     plt.ylabel("% Recovered Injections")
