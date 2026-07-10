@@ -2,6 +2,8 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
+from itertools import cycle
+
 mpl.rcParams['mathtext.fontset'] = 'cm'          # Computer Modern serif
 mpl.rcParams['mathtext.rm'] = 'serif'
 
@@ -31,6 +33,46 @@ def plot_spectra_elike(fig, axs, x, y, n_sections, title=None, xlabel=None, ylab
 
     for i in range(n_sections):
         axs[i].plot(x_sections[i], y_sections[i])
+
+def plot_spectra_ords(wave_arr, data, obs_idx=0, data2=None, figsize=(36, 20), data2_label="Best Fit"):
+    """
+    Plot all 60 orders for a single observation in a 6x10 grid.
+    
+    Parameters:
+    -----------
+    wave_arr : ndarray, shape (orders, wave_cols, observations)
+        Wavelength array
+    data : ndarray, shape (orders, wave_cols, observations)
+        Spectrum data to plot
+    obs_idx : int
+        Observation index to plot
+    figsize : tuple
+        Figure size (width, height)
+    """
+    fig, axes = plt.subplots(6, 10, figsize=figsize)
+    axes = axes.flatten()  # Flatten to 1D for easy iteration
+    
+    for order in range(60):
+        ax = axes[order]
+        
+        wave = wave_arr[order, :, obs_idx]
+        spec = data[order, :, obs_idx]
+        
+        ax.plot(wave, spec, label=f'Order {order}')
+
+        if data2 is not None:
+            poly = data2[order, :, obs_idx]
+            ax.plot(wave, poly, label=data2_label, zorder=5, linewidth=2)
+        # Axis labels only on outer edges
+        if order >= 50:  # Bottom row
+            ax.set_xlabel('Wavelength', fontsize=9)
+        if order % 10 == 0:  # Leftmost column
+            ax.set_ylabel('Flux', fontsize=9)
+        
+        ax.legend(fontsize=10, loc='best')
+
+    plt.tight_layout()
+    return fig, axes
 
 def plot_spectra_obs(n_obs_range, wave_arr, spec_arr, sigma_arr, date_arr, ordidx, title=None, figsize=(20,24)):
     start, end = n_obs_range  # end is exclusive
@@ -165,35 +207,55 @@ def plot_bic_deg(crit_vals, deg_vals, criterion="BIC"):
 
     return fig, axes
 
-def plot_spectra_ords(wave_arr, data, obs_idx=0, poly_arr=None, figsize=(15, 9)):
+## ___LASER PLOTS ___
+def plot_ordobs_peaks(fwhm_arr, 
+                      ordidx = 0, obsidx = 0, figsize=(20, 6), 
+                      style=tableau_cb10):
+    colors = cycle(style)
+    
+    peaks_data = fwhm_arr[ordidx, obsidx]
+    
+    plt.figure(figsize=figsize)
+    plt.plot(peaks_data['wave'], peaks_data['flux'], label="Spectrum", color=next(colors))
+    plt.scatter(peaks_data['x_peaks'], peaks_data['flx_pks'], 
+                label="Peaks", color=next(colors))
+    plt.plot(peaks_data['x_peaks'], peaks_data['half_maxes'], 
+                label="Half-width", color=next(colors), linestyle="dashed")
+    plt.plot(peaks_data['wave'], peaks_data['threshold'], 
+                label="Threshold", color=next(colors), linestyle="dashed")
+    plt.legend()
+    plt.grid()
+
+def plot_spectra_ords_peaks(fwhm_arr, obs_idx=0, figsize=(36, 20), style=tableau_cb10):
     """
     Plot all 60 orders for a single observation in a 6x10 grid.
-    
-    Parameters:
-    -----------
-    wave_arr : ndarray, shape (orders, wave_cols, observations)
-        Wavelength array
-    data : ndarray, shape (orders, wave_cols, observations)
-        Spectrum data to plot
-    obs_idx : int
-        Observation index to plot
-    figsize : tuple
-        Figure size (width, height)
+    Alongside detected peaks
     """
     fig, axes = plt.subplots(6, 10, figsize=figsize)
     axes = axes.flatten()  # Flatten to 1D for easy iteration
     
     for order in range(60):
+        colors = cycle(style)
+        
         ax = axes[order]
-        
-        wave = wave_arr[order, :, obs_idx]
-        spec = data[order, :, obs_idx]
-        
-        ax.plot(wave, spec, label=f'Order {order}')
 
-        if poly_arr is not None:
-            poly = poly_arr[order, :, obs_idx]
-            ax.plot(wave, poly, label="Best Fit", zorder=5, linewidth=2)
+        peaks_data = fwhm_arr[order, obs_idx]
+        
+        wave = peaks_data['wave']
+        spec = peaks_data['flux']
+        x_peaks = peaks_data['x_peaks']
+        flx_pks = peaks_data['flx_pks']
+        half_maxes = peaks_data['half_maxes']
+        threshold = peaks_data['threshold']
+        
+        ax.plot(wave, spec, label=f'Order {order}', color=next(colors))
+        ax.scatter(x_peaks, flx_pks, 
+                label="Peaks", color=next(colors))
+        ax.plot(x_peaks, half_maxes, 
+                    label="Half-width", color=next(colors), linestyle="dashed")
+        ax.plot(wave, threshold, 
+                    label="Threshold", color=next(colors), linestyle="dashed")
+        
         # Axis labels only on outer edges
         if order >= 50:  # Bottom row
             ax.set_xlabel('Wavelength', fontsize=9)
@@ -204,3 +266,12 @@ def plot_spectra_ords(wave_arr, data, obs_idx=0, poly_arr=None, figsize=(15, 9))
 
     plt.tight_layout()
     return fig, axes
+
+def plot_recovery_rate(tolerances, recovered_percentage, recovered_percentage_pass):
+    plt.plot(tolerances, recovered_percentage, label="All Injected Peaks")
+    plt.plot(tolerances, recovered_percentage_pass, label="> LSF FWHM")
+    plt.xscale("log")
+    plt.grid()
+    plt.ylabel("% Recovered Injections")
+    plt.xlabel("Allowed $\AA$ Away from Injection")
+    plt.legend()
