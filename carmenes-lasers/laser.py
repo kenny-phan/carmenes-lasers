@@ -83,7 +83,7 @@ def full_width_half_max(x, y, peakx, half_maxes, max_diff=0.01, verbose=False):
     return np.array(fwhm_arr), np.array(x_peaks), valid_mask
     
 
-def wave_to_fwhms(wave, flux, poly, 
+def wave_to_fwhms(wave, flux, sigma, poly, 
                   residual, coeff, 
                   max_diff=0.01, 
                   threshold_type="mad", interp_samples=None,
@@ -92,15 +92,16 @@ def wave_to_fwhms(wave, flux, poly,
     if interp_samples is not None:
         interp_wave = np.linspace(wave[0], wave[-1], num=interp_samples)
         flux = np.interp(interp_wave, wave, flux)
+        sigma = np.interp(interp_wave, wave, sigma)
         poly = np.interp(interp_wave, wave, poly)
         residual = np.interp(interp_wave, wave, residual)
 
         wave = interp_wave
         
     if threshold_type == "std":
-        threshold = poly + coeff * np.nanstd(residual) 
+        threshold = poly + coeff * np.sqrt(sigma**2 + np.nanstd(residual)**2)
     elif threshold_type == "mad":
-        threshold = poly + coeff * med_abs_dev(residual)
+        threshold = poly + coeff * np.sqrt(sigma**2 + med_abs_dev(residual)**2) 
 
     peaks, _ = find_peaks(flux, threshold) # get peaks above threshold 
         
@@ -283,6 +284,7 @@ def fwhm_test(wave, x_peaks, method="pixel", px_min=None, amplitude_L=1, broaden
                 fwhm, _, _, _, _, _, _, _, _ = wave_to_fwhms(wave, lsfs[windex, :], 
                                                np.zeros_like(wave), 
                                                np.zeros_like(wave), 
+                                               np.zeros_like(wave), 
                                                0, max_diff=0.5)
             
                 fwhm_lsfs[windex] = fwhm[0]
@@ -370,6 +372,7 @@ def get_fwhm_arr(new_wave_arr, flux_arr,
             flx_pks, threshold, 
             wave, flux, poly, residual) = wave_to_fwhms(wave, 
                                                    flux, 
+                                                   sigma,
                                                    poly,
                                                    residual,
                                                    coeff, 
@@ -452,12 +455,13 @@ def sample_recovery_rate(new_wave_arr,
     set_fwhm_px = kwargs.get('set_fwhm_px', 2.5)
     model_type = kwargs.get('model_type', 'astropy')
 
-    max_diff = kwargs.get('max_diff', 0.1)
+    max_diff = kwargs.get('max_diff', 0.01)
     threshold_type = kwargs.get('threshold_type', 'mad')
     interp_samples = kwargs.get('interp_samples', 50000)
 
     recovered_percentage_arr, recovered_percentage_pass_arr = [], []
-    
+
+    fwhm_arrs = []
     for run in tqdm(range(n_runs)):
         if wls is None:
             wls = np.random.uniform(low=5200, high=10400, size=(50,))
@@ -485,8 +489,13 @@ def sample_recovery_rate(new_wave_arr,
     
         recovered_percentage_arr.append(recovered_percentage)
         recovered_percentage_pass_arr.append(recovered_percentage_pass)
+        fwhm_arrs.append(fwhm_arr)
         
     recovered_percentage_arr = np.array(recovered_percentage_arr)
     recovered_percentage_pass_arr = np.array(recovered_percentage_pass_arr)
 
-    return tolerances, recovered_percentage_arr, recovered_percentage_pass_arr
+    return (tolerances, 
+            recovered_percentage_arr, 
+            recovered_percentage_pass_arr,
+            fwhm_arrs
+           )

@@ -220,10 +220,10 @@ def remove_polyfit_orders(wave_arr, no_nan_spec_arr, bins=10, degree=4):
 
     return poly_arr, nopoly_arr, bin_midpts_arr, bin_meds_arr
 
-def reduced_chi2(k, n, x, mu, sig):
+def reduced_chi2(k, n, x, mu, sig, axis=1):
     dof = n - k
     unsummed = ((x - mu)/sig)**2
-    return np.sum(unsummed, axis=1) / dof
+    return np.sum(unsummed, axis=axis) / dof
 
 def bic_chi2(k, n, x, mu, sig):
     dof = n - k
@@ -310,6 +310,7 @@ def resample_and_fit(wave_arr,
                     sigma_arr,
                     bary_corr_arr, 
                     save_dir, 
+                    dont_resample=True,
                     coeff=1,
                     resampler="fcr",
                     degrees=[1, 2, 3, 4, 5], 
@@ -330,7 +331,7 @@ def resample_and_fit(wave_arr,
                        os.path.exists(new_sig_path)
                       ]
 
-    if np.all(resamples_exist):
+    if np.all(resamples_exist) and dont_resample:
         debug_print(verbose, "resamples exist")
         new_wave_arr = np.load(new_wave_path, allow_pickle=True)
         new_spec_arr = np.load(new_spec_path, allow_pickle=True)
