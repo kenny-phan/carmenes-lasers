@@ -341,6 +341,42 @@ def extract_peaks_between_minima(wave, flux, sigma, center_wavelengths):
     
     return peaks_list, np.array(skipped_peaks)
 
+def thresh_and_fwhm(wave, flux, 
+                    sigma, poly, 
+                    residual, coeff, 
+                    max_diff, 
+                    threshold_type, 
+                    interp_samples, 
+                    method, px_min, 
+                    verbose):
+    
+    (fwhms, x_peaks, half_maxes, 
+    flx_pks, threshold, 
+    wave, flux, poly, residual) = wave_to_fwhms(wave, 
+                                           flux, 
+                                           sigma,
+                                           poly,
+                                           residual,
+                                           coeff, 
+                                           max_diff=max_diff, 
+                                           threshold_type=threshold_type, 
+                                           interp_samples=interp_samples, 
+                                           verbose=verbose)
+    
+    lsf_fwhms = fwhm_test(wave, x_peaks, method=method, px_min=px_min)
+    fwhm_test_pass = fwhms[fwhms > lsf_fwhms] 
+    # doesnt work with method"model"
+    x_test_pass = x_peaks[fwhms > lsf_fwhms]
+
+    return (fwhms, x_peaks, 
+            half_maxes, flx_pks, 
+            threshold, 
+            wave, flux, 
+            poly, residual, 
+            lsf_fwhms, 
+            fwhm_test_pass, 
+            x_test_pass)
+
 
 # default args above
 # 1-10s runtime
@@ -354,6 +390,7 @@ def get_fwhm_arr(new_wave_arr, flux_arr,
     verbose = kwargs.get('verbose', False)
     method = kwargs.get('method', "pixel")
     px_min = kwargs.get('px_min', 2.5)
+    save_dir = kwargs.get('save_dir', None)
     
     norders = new_wave_arr.shape[0]
     nobs = new_wave_arr.shape[2]
@@ -368,23 +405,21 @@ def get_fwhm_arr(new_wave_arr, flux_arr,
             residual = residual_arr[ordidx, :, obsidx]
             sigma = normalized_sig[ordidx, :, obsidx]
             
-            (fwhms, x_peaks, half_maxes, 
-            flx_pks, threshold, 
-            wave, flux, poly, residual) = wave_to_fwhms(wave, 
-                                                   flux, 
-                                                   sigma,
-                                                   poly,
-                                                   residual,
-                                                   coeff, 
-                                                   max_diff=max_diff, 
-                                                   threshold_type=threshold_type, 
-                                                   interp_samples=interp_samples, 
-                                                   verbose=verbose)
-
-            lsf_fwhms = fwhm_test(wave, x_peaks, method=method, px_min=px_min)
-            fwhm_test_pass = fwhms[fwhms > lsf_fwhms] 
-            # doesnt work with method"model"
-            x_test_pass = x_peaks[fwhms > lsf_fwhms]
+            (fwhms, x_peaks, 
+            half_maxes, flx_pks, 
+            threshold, 
+            wave, flux, 
+            poly, residual, 
+            lsf_fwhms, 
+            fwhm_test_pass, 
+            x_test_pass) = thresh_and_fwhm(wave, flux, 
+                    sigma, poly, 
+                    residual, coeff, 
+                    max_diff, 
+                    threshold_type, 
+                    interp_samples, 
+                    method, px_min, 
+                    verbose)
             
             # Store as dictionary
             fwhm_arr[ordidx, obsidx] = {
@@ -401,6 +436,9 @@ def get_fwhm_arr(new_wave_arr, flux_arr,
                 'fwhm_test_pass': fwhm_test_pass,
                 'x_test_pass': x_test_pass
             }
+
+    if save_dir:
+        np.savez(savedir + "/peaks_arr.npz", fwhm_arr)
 
     return fwhm_arr
 
