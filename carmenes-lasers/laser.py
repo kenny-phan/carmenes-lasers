@@ -537,3 +537,68 @@ def sample_recovery_rate(new_wave_arr,
             recovered_percentage_pass_arr,
             fwhm_arrs
            )
+
+def save_fwhm_per_obs(dir_path, save_folder,
+                      wave_arr, flux_arr, 
+                      sigma_arr, poly_arr, 
+                      residual_arr, coeff=1, 
+                      max_diff=0.01, 
+                      threshold_type='mad', 
+                      interp_samples=50000, 
+                      method='pixel', 
+                      px_min=2.5, 
+                      verbose=False):
+        
+    norders = wave_arr.shape[0]
+    nobs = wave_arr.shape[2]
+ 
+    for obsidx in range(nobs): # per observation
+        obs_arr = np.empty((norders), dtype=object)
+        print(f"Processing Obs {obsidx}")
+
+        for ordidx in range(norders): # per order
+            wave = wave_arr[ordidx, :, obsidx]
+            flux = flux_arr[ordidx, :, obsidx]
+            sigma = sigma_arr[ordidx, :, obsidx]
+            poly = poly_arr[ordidx, :, obsidx]
+            residual = residual_arr[ordidx, :, obsidx]
+            
+            (fwhms, x_peaks, 
+            half_maxes, flx_pks, 
+            threshold, 
+            wave, flux, 
+            poly, residual, 
+            lsf_fwhms, 
+            fwhm_test_pass, 
+            x_test_pass) = thresh_and_fwhm(wave, flux, 
+                    sigma, poly, 
+                    residual, coeff, 
+                    max_diff, 
+                    threshold_type, 
+                    interp_samples, 
+                    method, px_min, 
+                    verbose)
+
+            obs_arr[ordidx] = {
+                'fwhms': fwhms,
+                'x_peaks': x_peaks,
+                'half_maxes': half_maxes,
+                'flx_pks': flx_pks,
+                'threshold': threshold,
+                'wave': wave, 
+                'flux':flux,
+                'poly': poly,
+                'residual': residual, 
+                'lsf_fwhms': lsf_fwhms,
+                'fwhm_test_pass': fwhm_test_pass,
+                'x_test_pass': x_test_pass
+            }
+
+            save_path = dir_path + save_folder # e.g. "/base_peaks"
+            if os.path.exists(save_path) is False: 
+                os.mkdir(save_path)
+    
+            save_file = save_path + f"/base_peaks_{obsidx}.npz"
+            np.savez(save_file, obs_arr)
+    
+            print("saved to:", save_file)
