@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 
 from astropy.modeling.models import Voigt1D
@@ -594,11 +596,11 @@ def save_fwhm_per_obs(dir_path, save_folder,
                 'x_test_pass': x_test_pass
             }
 
-            save_path = dir_path + save_folder # e.g. "/base_peaks"
-            if os.path.exists(save_path) is False: 
-                os.mkdir(save_path)
-    
-            save_file = save_path + f"/base_peaks_{obsidx}.npz"
-            np.savez(save_file, obs_arr)
-    
-            print("saved to:", save_file)
+        save_path = dir_path + save_folder # e.g. "/base_peaks"
+        if os.path.exists(save_path) is False: 
+            os.mkdir(save_path)
+
+        save_file = save_path + f"{save_folder}_{obsidx}.npz"
+        np.savez(save_file, obs_arr)
+
+        print("saved to:", save_file)
