@@ -543,7 +543,8 @@ def sample_recovery_rate(new_wave_arr,
 def save_fwhm_per_obs(dir_path, save_folder,
                       wave_arr, flux_arr, 
                       sigma_arr, poly_arr, 
-                      residual_arr, coeff=1, 
+                      residual_arr, mult=None, 
+                      wls=None, coeff=1, 
                       max_diff=0.01, 
                       threshold_type='mad', 
                       interp_samples=50000, 
@@ -556,7 +557,7 @@ def save_fwhm_per_obs(dir_path, save_folder,
  
     for obsidx in range(nobs): # per observation
         obs_arr = np.empty((norders), dtype=object)
-        print(f"Processing Obs {obsidx}")
+        debug_print(verbose, f"Processing Obs {obsidx}")
 
         for ordidx in range(norders): # per order
             wave = wave_arr[ordidx, :, obsidx]
@@ -580,7 +581,7 @@ def save_fwhm_per_obs(dir_path, save_folder,
                     interp_samples, 
                     method, px_min, 
                     verbose)
-
+            
             obs_arr[ordidx] = {
                 'fwhms': fwhms,
                 'x_peaks': x_peaks,
@@ -593,7 +594,9 @@ def save_fwhm_per_obs(dir_path, save_folder,
                 'residual': residual, 
                 'lsf_fwhms': lsf_fwhms,
                 'fwhm_test_pass': fwhm_test_pass,
-                'x_test_pass': x_test_pass
+                'x_test_pass': x_test_pass,
+                'mult': mult, 
+                'wls': wls
             }
 
         save_path = dir_path + save_folder # e.g. "/base_peaks"
@@ -603,4 +606,20 @@ def save_fwhm_per_obs(dir_path, save_folder,
         save_file = save_path + f"{save_folder}_{obsidx}.npz"
         np.savez(save_file, obs_arr)
 
-        print("saved to:", save_file)
+        debug_print(verbose, ("saved to:", save_file))
+
+def generate_inj_params(low=5140, high=10400, 
+                        length=100, mult_range=[1, 5], 
+                        magic_wls=None):
+
+    if magic_wls is None:
+        magic_wls = [532.1, 656.5, 589.1] * 10 
+    
+    wls = np.random.uniform(low=low, high=high, size=(length,))
+    mult = np.random.uniform(mult_range[0], mult_range[-1])
+    
+    for magic_wl in magic_wls:
+        closest_idx = np.argmin(np.abs(wls - magic_wl))
+        wls[closest_idx] = magic_wl
+
+    return mult, wls
