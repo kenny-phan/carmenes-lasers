@@ -2,6 +2,8 @@ import astropy.units as u
 import numpy as np
 
 from astropy.constants import L_sun
+from astropy.coordinates import SkyCoord
+from astroquery.gaia import Gaia
 
 def gaia_query(ra, dec, radius=5*u.arcsec):
     coords = SkyCoord(ra=ra, dec=dec, unit=u.deg)
