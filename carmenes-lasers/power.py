@@ -5,6 +5,8 @@ from astropy.constants import L_sun
 from astropy.coordinates import SkyCoord
 from astroquery.gaia import Gaia
 
+Gaia.MAIN_GAIA_TABLE = "gaiadr3.gaia_source" 
+
 def gaia_query(ra, dec, radius=5*u.arcsec):
     coords = SkyCoord(ra=ra, dec=dec, unit=u.deg)
     gaia_result = Gaia.query_object(coordinate=coords, radius=radius)
@@ -94,3 +96,20 @@ def gaia_to_lum(result):
     lum_err = abs_mag_to_lum_err(abs_mag, abs_mag_err)*u.W
     
     return lum, lum_err
+
+def phan_eq9(L_star, lambda_l, 
+             delta_lambda, d_t, 
+             W_LSF, alpha, sigma):
+    const = 1.22**2 / 16
+    num = L_star * lambda_l**2 * W_LSF * alpha * sigma
+    den = delta_lambda * d_t**2
+    return const * num / den
+
+#only relies on star uncertainty
+def phan_eq9_err(L_star_err, lambda_l, 
+             delta_lambda, d_t, 
+             W_LSF, alpha, sigma):
+    dL_ldL_star = phan_eq9(1, lambda_l, 
+             delta_lambda, d_t, 
+             W_LSF, alpha, sigma)
+    return dL_ldL_star*L_star_err
