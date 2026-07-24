@@ -115,7 +115,7 @@ def phan_eq9_err(L_star_err, lambda_l,
     return dL_ldL_star*L_star_err
 
 def get_power_arr(wave_arr, base_peaks, 
-                  L_star, lambda_l, alpha,
+                  L_star, L_star_err, alpha,
                      delta_lambda=5000, d_t=3.5 * 1e10, 
                      W_LSF=0.056, interp_samples=50000):
 
