@@ -122,12 +122,13 @@ def get_power_arr(wave_arr, base_peaks,
     power_arr = np.empty((wave_arr.shape[0], 
                           interp_samples))
     power_err_arr = np.copy(power_arr)
+    sigma_arr = np.copy(power_arr)
     
     for ordidx in range(wave_arr.shape[0]):
         threshold = base_peaks['arr_0'][ordidx]['threshold']
         poly = base_peaks['arr_0'][ordidx]['poly']
         
-        sigma_arr = threshold - poly
+        sigma = threshold - poly
         
         wave = wave_arr[ordidx, :, 0]
         interp_grid = np.linspace(wave[0], wave[-1], interp_samples)
@@ -135,12 +136,13 @@ def get_power_arr(wave_arr, base_peaks,
                 
         L_laser = phan_eq9(L_star, lambda_l, 
                      delta_lambda, d_t, 
-                     W_LSF, alpha, sigma_arr)
+                     W_LSF, alpha, sigma)
         L_laser_err = phan_eq9_err(L_star_err, lambda_l, 
                      delta_lambda, d_t, 
-                     W_LSF, alpha, sigma_arr)
+                     W_LSF, alpha, sigma)
     
         power_arr[ordidx, :] = L_laser
         power_err_arr[ordidx, :] = L_laser_err
-
-    return power_arr, power_err_arr
+        sigma_arr[ordidx, :] = sigma
+        
+    return power_arr, power_err_arr, sigma_arr
