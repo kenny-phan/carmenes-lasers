@@ -113,3 +113,34 @@ def phan_eq9_err(L_star_err, lambda_l,
              delta_lambda, d_t, 
              W_LSF, alpha, sigma)
     return dL_ldL_star*L_star_err
+
+def get_power_arr(wave_arr, base_peaks, 
+                  L_star, lambda_l, alpha,
+                     delta_lambda=5000, d_t=3.5 * 1e10, 
+                     W_LSF=0.056, interp_samples=50000):
+
+    power_arr = np.empty((wave_arr.shape[0], 
+                          interp_samples))
+    power_err_arr = np.copy(power_arr)
+    
+    for ordidx in range(wave_arr.shape[0]):
+        threshold = base_peaks['arr_0'][ordidx]['threshold']
+        poly = base_peaks['arr_0'][ordidx]['poly']
+        
+        sigma_arr = threshold - poly
+        
+        wave = wave_arr[ordidx, :, 0]
+        interp_grid = np.linspace(wave[0], wave[-1], interp_samples)
+        lambda_l = np.interp(interp_grid, wave, wave) #ang
+                
+        L_laser = phan_eq9(L_star, lambda_l, 
+                     delta_lambda, d_t, 
+                     W_LSF, alpha, sigma_arr)
+        L_laser_err = phan_eq9_err(L_star_err, lambda_l, 
+                     delta_lambda, d_t, 
+                     W_LSF, alpha, sigma_arr)
+    
+        power_arr[ordidx, :] = L_laser
+        power_err_arr[ordidx, :] = L_laser_err
+
+    return power_arr, power_err_arr
