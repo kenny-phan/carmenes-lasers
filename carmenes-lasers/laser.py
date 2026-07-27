@@ -16,7 +16,7 @@ from load_data import debug_print
 def mse(obs, pred):
     return np.sum((obs - pred)**2) / len(obs)
     
-def med_abs_dev(x):
+def med_abs_dev(x): # 2 for obs
     med = np.nanmedian(x)
     abs_dev = np.abs(x - med)
     mad = np.nanmedian(abs_dev)
@@ -106,7 +106,7 @@ def wave_to_fwhms(wave, flux, sigma, poly,
         threshold = poly + coeff * np.sqrt(sigma**2 + med_abs_dev(residual)**2) 
 
     peaks, _ = find_peaks(flux, threshold) # get peaks above threshold 
-        
+    debug_print(verbose, f"scipy peaks: {len(peaks)}")
     wave_pks, flx_pks, poly_pks = wave[peaks], flux[peaks], poly[peaks]
 
     half_maxes = poly_pks + 0.5*(flx_pks - poly_pks)
@@ -115,6 +115,8 @@ def wave_to_fwhms(wave, flux, sigma, poly,
                                          wave_pks, half_maxes, 
                                          max_diff, verbose=verbose) # fwhm of peaks
 
+    debug_print(verbose, f"fwhm peaks: {len(x_peaks)}")
+    
     return (fwhms, x_peaks, half_maxes[valid_mask], 
             flx_pks[valid_mask], threshold, 
             wave, flux, poly, residual)
@@ -165,97 +167,132 @@ def lsf_per_wav(wave, wl,
                       x=wave)
         return v1
 
-# def identify_peaks(normalized_spec, poly_arr_best, n=3):
-#     """
-#     Adapted from Tellis & Marcy 2017, Sec. 3 
-#     """
-#     num_orders = normalized_spec.shape[0]
-#     num_obs = normalized_spec.shape[2]
-    
-#     sub_arr = normalized_spec - poly_arr_best
-    
-#     positive_sub_arr = np.copy(sub_arr)
-#     positive_sub_arr[positive_sub_arr < 0] = np.nan
-    
-#     positive_sub_arr_filtered = np.copy(positive_sub_arr)
-#     medians_dict = {}  # Store medians indexed by (order, obs, group_id)
+# Find which orders contain this wavelength
+def identify_orders(new_wave_arr, wl):
+    mins = np.nanmin(new_wave_arr, axis=(1, 2))
+    maxs = np.nanmax(new_wave_arr, axis=(1, 2))
+    orders = np.where((mins <= wl) & (maxs >= wl))[0]
+    return orders 
+        
+# Find column index closest to target wavelength in this order/obs
+def get_colidx(new_wave_arr, ordidx, obsidx, wl):
+    wave = new_wave_arr[ordidx, :, obsidx]
+    col_idx = np.nanargmin(np.abs(wave - wl))  # Closest column
+    return wave, col_idx
 
-#     median_of_medians = np.full((num_orders, num_obs), np.nan)
+def comb_sig_per_wl(wave_arr, wl, obsidx,
+                    combined_sigma_ords):
     
-#     for order in range(num_orders):
-#         for obs in range(num_obs):
-#             spectrum = positive_sub_arr_filtered[order, :, obs]
-#             labeled, num_f = ndimage.label(~np.isnan(spectrum))
-            
-#             if num_f > 0:
-#                 sizes = np.bincount(labeled)[1:]  # Skip background (0)
-#                 valid = np.where(sizes > n)[0] + 1
-                
-#                 # Calculate median for each valid group
-#                 for group_id in valid:
-#                     group_pixels = spectrum[labeled == group_id]
-#                     group_median = np.nanmedian(group_pixels)
-#                     medians_dict[(order, group_id, obs)] = group_median
-                
-#                 # Set invalid groups to NaN
-#                 positive_sub_arr_filtered[order, :, obs][~np.isin(labeled, valid)] = np.nan
-#                 medians_for_pair = [v for (o, g, ob), v in medians_dict.items() 
-#                            if o == order and ob == obs]
+    orders = identify_orders(wave_arr, wl)
 
-#                 if medians_for_pair:
-#                     median_of_medians[order, obs] = np.median(medians_for_pair)
+    sigmas = np.empty_like(orders, dtype=float)
+    for i, ordidx in enumerate(orders): 
+        _, col_idx = get_colidx(wave_arr, 
+                             ordidx, 
+                             obsidx, wl)
+        sigma = combined_sigma_ords[ordidx][col_idx]
+        sigmas[i] = sigma
 
-#     return positive_sub_arr_filtered, median_of_medians
+    return sigmas
 
-def make_laser_arr(new_wave_arr, 
-                   normalized_spec,
-                   poly_arr_best, 
-                   wls=None, 
+# Claude optimized
+def make_laser_arr(dir_path, 
+                   wls, 
                    mult=1.5, 
-                   n=3, broaden_coeff=1,
+                   n=3, 
+                   broaden_coeff=1,
                    model_type="astropy",
                    set_fwhm_px=None,
                    verbose=False):
-    if wls is None:
-        wls = np.arange(5200, 10400, 50)
+    
+    results = np.load(dir_path + "/results.npz")
+    new_wave_arr = results['new_wave_arr']
+    normalized_spec = results['normalized_spec']
+    poly_arr_best = results['poly_arr_best']
     
     n_ords, n_cols, n_obs = new_wave_arr.shape
     laser_arr = np.zeros((n_ords, n_cols, n_obs))
     
-    for wl in wls:
-        # Find which orders contain this wavelength
-        mins = np.nanmin(new_wave_arr, axis=(1, 2))
-        maxs = np.nanmax(new_wave_arr, axis=(1, 2))
-        orders = np.where((mins <= wl) & (maxs >= wl))[0]
-        
-        debug_print(verbose, f"WL {wl}: orders {orders}")
-        
-        for order in orders:
+    # OPTIMIZATION 1: Load all combined_sigma files ONCE per observation
+    combined_sigma_dict = {}
+    for obsidx in range(n_obs):
+        combined_sigma_dict[obsidx] = np.load(
+            dir_path + f"/combined_sigma/combined_sigma_{obsidx}.npy"
+        )
+    
+    # OPTIMIZATION 2: Pre-compute wavelength-to-pixel grids for set_fwhm
+    wl_to_px_grids = {}
+    if set_fwhm_px is not None:
+        for order in range(n_ords):
             for obsidx in range(n_obs):
-                # Find column index closest to target wavelength in this order/obs
                 wave = new_wave_arr[order, :, obsidx]
-                col_idx = np.nanargmin(np.abs(wave - wl))  # Closest column
+                pixels = np.linspace(0, len(wave), len(wave))
+                # Only compute where wave is not NaN
+                valid = ~np.isnan(wave)
+                if np.any(valid):
+                    # Polyfit only once per order/observation
+                    wave_of_px = np.polyfit(pixels[valid], wave[valid], 1)
+                    wl_to_px_grids[(order, obsidx)] = wave_of_px
+    
+    # OPTIMIZATION 3: Reorganize loop for better cache locality
+    # Identify which orders contain each wavelength (vectorized)
+    wl_to_orders = {}
+    mins = np.nanmin(new_wave_arr, axis=(1, 2))
+    maxs = np.nanmax(new_wave_arr, axis=(1, 2))
+    
+    for w, wl in enumerate(wls):
+        orders = np.where((mins <= wl) & (maxs >= wl))[0]
+        wl_to_orders[wl] = orders
+        debug_print(verbose, f"WL {wl}: orders {orders}")
+    
+    # Main loop: iterate by observation (keeps file in cache)
+    for obsidx in range(n_obs):
+        combined_sigma_ords = combined_sigma_dict[obsidx]
+        
+        for wl in wls:
+            orders = wl_to_orders[wl]
+            
+            # OPTIMIZATION 4: Get all col_idx for this wl/obsidx at once
+            col_indices = {}
+            for order in orders:
+                wave = new_wave_arr[order, :, obsidx]
+                col_idx = np.nanargmin(np.abs(wave - wl))
+                col_indices[order] = (wave, col_idx)
+            
+            # OPTIMIZATION 5: Batch Voigt1D evaluation
+            # Instead of creating new models, evaluate all at once
+            for i, order in enumerate(orders):
+                wave, col_idx = col_indices[order]
                 
-                amplitude = (poly_arr_best[order, col_idx, obsidx] 
-                             * mult)
-
+                # Get sigma
+                sigma = combined_sigma_ords[order][col_idx]
+                amplitude = np.abs(poly_arr_best[order, col_idx, obsidx] 
+                                   * sigma * mult)
+                
+                # Compute FWHM once
                 if set_fwhm_px is not None:
-                    pixels = np.linspace(0, len(wave), len(wave))
-                    wave_of_px = np.polyfit(pixels, wave, 1)
-                    g = np.poly1d(wave_of_px)
-
-                    half_width = set_fwhm_px / 2
-
-                    set_fwhm = g(col_idx + half_width) - g(col_idx - half_width)
-                    
-                laser_arr[order, :, obsidx] += lsf_per_wav(wave, 
-                                                       wl,
-                                                       amplitude_L=amplitude,
-                                                       broaden_coeff=broaden_coeff,
-                                                       set_fwhm=set_fwhm,
-                                                       model_type=model_type)
+                    wave_of_px = wl_to_px_grids.get((order, obsidx))
+                    if wave_of_px is not None:
+                        g = np.poly1d(wave_of_px)
+                        half_width = set_fwhm_px / 2
+                        set_fwhm = g(col_idx + half_width) - g(col_idx - half_width)
+                    else:
+                        set_fwhm = None
+                else:
+                    set_fwhm = None
+                
+                # Evaluate LSF
+                lsf_vals = lsf_per_wav(wave, 
+                                       wl,
+                                       amplitude_L=amplitude,
+                                       broaden_coeff=broaden_coeff,
+                                       set_fwhm=set_fwhm,
+                                       model_type=model_type)
+                
+                laser_arr[order, :, obsidx] += lsf_vals
     
     return laser_arr
+    
 
 def fwhm_test(wave, x_peaks, method="pixel", px_min=None, amplitude_L=1, broaden_coeff=1, model_type="astropy"):
     
@@ -298,50 +335,50 @@ def fwhm_test(wave, x_peaks, method="pixel", px_min=None, amplitude_L=1, broaden
 
         return fwhm_lsfs
 
-def extract_peaks_between_minima(wave, flux, sigma, center_wavelengths):
-    """
-    Extract peak regions bounded by local minima on both sides. 
-    THIS SHOULD BE SLOPE = 0 BUT OK FOR NOW
+# def extract_peaks_between_minima(wave, flux, sigma, center_wavelengths):
+#     """
+#     Extract peak regions bounded by local minima on both sides. 
+#     THIS SHOULD BE SLOPE = 0 BUT OK FOR NOW
     
-    Args:
-        wave: 1D wavelength array
-        flux: 1D flux array
-        center_wavelengths: 1D array or list of central wavelength peak locations (actual wavelength values)
+#     Args:
+#         wave: 1D wavelength array
+#         flux: 1D flux array
+#         center_wavelengths: 1D array or list of central wavelength peak locations (actual wavelength values)
     
-    Returns:
-        peaks_list: list of tuples (wave_segment, flux_segment) for valid peaks
-        skipped_peaks: 1D array of central wavelengths where minima weren't found on both sides
-    """
-    peaks_list = []
-    skipped_peaks = []
+#     Returns:
+#         peaks_list: list of tuples (wave_segment, flux_segment) for valid peaks
+#         skipped_peaks: 1D array of central wavelengths where minima weren't found on both sides
+#     """
+#     peaks_list = []
+#     skipped_peaks = []
     
-    # Find all local minima in the spectrum (inverted flux)
-    minima_indices, _ = find_peaks(-flux)
-    minima_waves = wave[minima_indices]
+#     # Find all local minima in the spectrum (inverted flux)
+#     minima_indices, _ = find_peaks(-flux)
+#     minima_waves = wave[minima_indices]
     
-    for center_wave in center_wavelengths:
-        # Find minima on the left and right of this peak
-        left_minima = minima_waves[minima_waves < center_wave]
-        right_minima = minima_waves[minima_waves > center_wave]
+#     for center_wave in center_wavelengths:
+#         # Find minima on the left and right of this peak
+#         left_minima = minima_waves[minima_waves < center_wave]
+#         right_minima = minima_waves[minima_waves > center_wave]
         
-        # Check if both sides have a minimum
-        if len(left_minima) == 0 or len(right_minima) == 0:
-            skipped_peaks.append(center_wave)
-            continue
+#         # Check if both sides have a minimum
+#         if len(left_minima) == 0 or len(right_minima) == 0:
+#             skipped_peaks.append(center_wave)
+#             continue
         
-        # Get the closest minimum on each side
-        left_min_wave = left_minima[-1]  # rightmost of left minima
-        right_min_wave = right_minima[0]  # leftmost of right minima
+#         # Get the closest minimum on each side
+#         left_min_wave = left_minima[-1]  # rightmost of left minima
+#         right_min_wave = right_minima[0]  # leftmost of right minima
         
-        # Extract the segment (inclusive)
-        mask = (wave >= left_min_wave) & (wave <= right_min_wave)
-        wave_segment = wave[mask]
-        flux_segment = flux[mask]
-        sigma_segment = sigma[mask]
+#         # Extract the segment (inclusive)
+#         mask = (wave >= left_min_wave) & (wave <= right_min_wave)
+#         wave_segment = wave[mask]
+#         flux_segment = flux[mask]
+#         sigma_segment = sigma[mask]
         
-        peaks_list.append((wave_segment, flux_segment, sigma_segment))
+#         peaks_list.append((wave_segment, flux_segment, sigma_segment))
     
-    return peaks_list, np.array(skipped_peaks)
+#     return peaks_list, np.array(skipped_peaks)
 
 def thresh_and_fwhm(wave, flux, 
                     sigma, poly, 
@@ -387,8 +424,8 @@ def get_fwhm_arr(new_wave_arr, flux_arr,
                  normalized_sig, coeff, **kwargs):
 
     max_diff = kwargs.get('max_diff', 0.01)
-    threshold_type = kwargs.get('threshold_type', 'std')
-    interp_samples = kwargs.get('interp_samples', None)
+    threshold_type = kwargs.get('threshold_type', 'mad')
+    interp_samples = kwargs.get('interp_samples', 50000)
     verbose = kwargs.get('verbose', False)
     method = kwargs.get('method', "pixel")
     px_min = kwargs.get('px_min', 2.5)
@@ -444,101 +481,101 @@ def get_fwhm_arr(new_wave_arr, flux_arr,
 
     return fwhm_arr
 
+# this is recovery rate as a function of the allowed gap between expected and recovered
+# def recovery_rate(fwhm_arr, tolerances=None,
+#                   wls=None, x_peaks_key='x_peaks'):
 
-def recovery_rate(fwhm_arr, tolerances=None,
-                  wls=None, x_peaks_key='x_peaks'):
-
-    if wls is None:
-        wls = np.arange(5200, 10400, 50)
-    if tolerances is None:
-        tolerances = np.logspace(-4, 0)
+#     if wls is None:
+#         wls = np.arange(5200, 10400, 50)
+#     if tolerances is None:
+#         tolerances = np.logspace(-4, 0)
         
-    all_x_peaks_arr = np.concatenate([fwhm_arr[order, ordidx][x_peaks_key] 
-                            for order in range(fwhm_arr.shape[0]) 
-                            for ordidx in range(fwhm_arr.shape[1])])
+#     all_x_peaks_arr = np.concatenate([fwhm_arr[order, ordidx][x_peaks_key] 
+#                             for order in range(fwhm_arr.shape[0]) 
+#                             for ordidx in range(fwhm_arr.shape[1])])
     
-    recovereds = []
-    for tolerance in tolerances:
-        matched_fwhms = []
-        for target_wl in wls:
-            # Find FWHMs within tolerance
-            mask = np.abs(all_x_peaks_arr - target_wl) <= tolerance
-            if np.any(mask):
-                # Pick closest among valid candidates
-                valid_indices = np.where(mask)[0]
-                closest_idx = valid_indices[np.argmin(np.abs(all_x_peaks_arr[valid_indices] - target_wl))]
-                matched_fwhms.append(all_x_peaks_arr[closest_idx])
-            else:
-                matched_fwhms.append(np.nan)  # No match within tolerance
+#     recovereds = []
+#     for tolerance in tolerances:
+#         matched_fwhms = []
+#         for target_wl in wls:
+#             # Find FWHMs within tolerance
+#             mask = np.abs(all_x_peaks_arr - target_wl) <= tolerance
+#             if np.any(mask):
+#                 # Pick closest among valid candidates
+#                 valid_indices = np.where(mask)[0]
+#                 closest_idx = valid_indices[np.argmin(np.abs(all_x_peaks_arr[valid_indices] - target_wl))]
+#                 matched_fwhms.append(all_x_peaks_arr[closest_idx])
+#             else:
+#                 matched_fwhms.append(np.nan)  # No match within tolerance
         
-        matched_fwhms = np.array(matched_fwhms)
-        n_recovered = len(matched_fwhms[~np.isnan(matched_fwhms)])
-        recovereds.append(n_recovered)
+#         matched_fwhms = np.array(matched_fwhms)
+#         n_recovered = len(matched_fwhms[~np.isnan(matched_fwhms)])
+#         recovereds.append(n_recovered)
     
-    recovereds = np.array(recovereds)
-    recovered_percentage = 100*recovereds / len(wls)
+#     recovereds = np.array(recovereds)
+#     recovered_percentage = 100*recovereds / len(wls)
     
-    return tolerances, recovered_percentage
+#     return tolerances, recovered_percentage
 
 
-def sample_recovery_rate(new_wave_arr, 
-                         normalized_spec, 
-                         poly_arr_best, 
-                         residual_arr, 
-                         normalized_sig, 
-                         coeff,
-                         n_runs=100, 
-                         wls=None, **kwargs):
+# def sample_recovery_rate(new_wave_arr, 
+#                          normalized_spec, 
+#                          poly_arr_best, 
+#                          residual_arr, 
+#                          normalized_sig, 
+#                          coeff,
+#                          n_runs=100, 
+#                          wls=None, **kwargs):
 
-    mult = kwargs.get('mult', 1.5)
-    broaden_coeff = kwargs.get('broaden_coeff', 1)
-    set_fwhm_px = kwargs.get('set_fwhm_px', 2.5)
-    model_type = kwargs.get('model_type', 'astropy')
+#     mult = kwargs.get('mult', 1.5)
+#     broaden_coeff = kwargs.get('broaden_coeff', 1)
+#     set_fwhm_px = kwargs.get('set_fwhm_px', 2.5)
+#     model_type = kwargs.get('model_type', 'astropy')
 
-    max_diff = kwargs.get('max_diff', 0.01)
-    threshold_type = kwargs.get('threshold_type', 'mad')
-    interp_samples = kwargs.get('interp_samples', 50000)
+#     max_diff = kwargs.get('max_diff', 0.01)
+#     threshold_type = kwargs.get('threshold_type', 'mad')
+#     interp_samples = kwargs.get('interp_samples', 50000)
 
-    recovered_percentage_arr, recovered_percentage_pass_arr = [], []
+#     recovered_percentage_arr, recovered_percentage_pass_arr = [], []
 
-    fwhm_arrs = []
-    for run in tqdm(range(n_runs)):
-        if wls is None:
-            wls = np.random.uniform(low=5200, high=10400, size=(50,))
+#     fwhm_arrs = []
+#     for run in tqdm(range(n_runs)):
+#         if wls is None:
+#             wls = np.random.uniform(low=5200, high=10400, size=(50,))
     
-        laser_arr = make_laser_arr(new_wave_arr, normalized_spec, poly_arr_best, 
-                               mult=mult, broaden_coeff=broaden_coeff, 
-                                   set_fwhm_px=set_fwhm_px, wls=wls,
-                               model_type=model_type)
+#         laser_arr = make_laser_arr(new_wave_arr, normalized_spec, poly_arr_best, 
+#                                mult=mult, broaden_coeff=broaden_coeff, 
+#                                    set_fwhm_px=set_fwhm_px, wls=wls,
+#                                model_type=model_type)
         
-        normalized_laser_arr = laser_arr / poly_arr_best
+#         normalized_laser_arr = laser_arr / poly_arr_best
         
-        fwhm_arr = get_fwhm_arr(new_wave_arr, normalized_laser_arr, 
-                         poly_arr_best, residual_arr, 
-                         normalized_sig, coeff, max_diff=max_diff, 
-                        threshold_type=threshold_type,
-                        interp_samples=interp_samples)
+#         fwhm_arr = get_fwhm_arr(new_wave_arr, normalized_laser_arr, 
+#                          poly_arr_best, residual_arr, 
+#                          normalized_sig, coeff, max_diff=max_diff, 
+#                         threshold_type=threshold_type,
+#                         interp_samples=interp_samples)
     
-        tolerances, recovered_percentage = recovery_rate(fwhm_arr, 
-                                                         wls=wls, 
-                                                         x_peaks_key='x_peaks')
-        (tolerances, 
-         recovered_percentage_pass) = recovery_rate(fwhm_arr, 
-                                               wls=wls,
-                                              x_peaks_key="x_test_pass")
+#         tolerances, recovered_percentage = recovery_rate(fwhm_arr, 
+#                                                          wls=wls, 
+#                                                          x_peaks_key='x_peaks')
+#         (tolerances, 
+#          recovered_percentage_pass) = recovery_rate(fwhm_arr, 
+#                                                wls=wls,
+#                                               x_peaks_key="x_test_pass")
     
-        recovered_percentage_arr.append(recovered_percentage)
-        recovered_percentage_pass_arr.append(recovered_percentage_pass)
-        fwhm_arrs.append(fwhm_arr)
+#         recovered_percentage_arr.append(recovered_percentage)
+#         recovered_percentage_pass_arr.append(recovered_percentage_pass)
+#         fwhm_arrs.append(fwhm_arr)
         
-    recovered_percentage_arr = np.array(recovered_percentage_arr)
-    recovered_percentage_pass_arr = np.array(recovered_percentage_pass_arr)
+#     recovered_percentage_arr = np.array(recovered_percentage_arr)
+#     recovered_percentage_pass_arr = np.array(recovered_percentage_pass_arr)
 
-    return (tolerances, 
-            recovered_percentage_arr, 
-            recovered_percentage_pass_arr,
-            fwhm_arrs
-           )
+#     return (tolerances, 
+#             recovered_percentage_arr, 
+#             recovered_percentage_pass_arr,
+#             fwhm_arrs
+#            )
 
 def save_fwhm_per_obs(dir_path, save_folder,
                       wave_arr, flux_arr, 
@@ -609,17 +646,40 @@ def save_fwhm_per_obs(dir_path, save_folder,
         debug_print(verbose, ("saved to:", save_file))
 
 def generate_inj_params(low=5140, high=10400, 
-                        length=100, mult_range=[1, 5], 
+                        length=100, buffer=10, 
                         magic_wls=None):
-
+    # from hippke 2018
     if magic_wls is None:
-        magic_wls = [532.1, 656.5, 589.1] * 10 
+        magic_wls = [5321, 6565, 5891] # ang
     
     wls = np.random.uniform(low=low, high=high, size=(length,))
-    mult = np.random.uniform(mult_range[0], mult_range[-1])
+
+    # Vectorized pairwise distance check
+    distances = np.abs(wls[:, np.newaxis] - wls[np.newaxis, :])
+    
+    # Get indices of upper triangle (excludes diagonal, avoids duplicates)
+    i, j = np.triu_indices_from(distances, k=1)
+    
+    # Find pairs within buffer
+    mask = distances[i, j] < buffer
+    violations = list(zip(i[mask], j[mask]))
+    
+    if violations:
+        # Move one wavelength from each violation
+        for idx1, idx2 in violations:
+            
+            for _ in range(100):
+                new_wl = np.random.uniform(low, high)
+                
+                # Vectorized check: is new_wl valid?
+                min_distance = np.min(np.abs(new_wl - np.delete(wls, idx2)))
+                if min_distance >= buffer:
+                    wls[idx2] = new_wl
+                    break
     
     for magic_wl in magic_wls:
         closest_idx = np.argmin(np.abs(wls - magic_wl))
         wls[closest_idx] = magic_wl
 
-    return mult, wls
+    return wls
+
