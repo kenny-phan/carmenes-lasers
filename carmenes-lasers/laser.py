@@ -683,3 +683,78 @@ def generate_inj_params(low=5140, high=10400,
 
     return wls
 
+def get_ord_to_wl_arr(wave_arr, wls):
+    nords = wave_arr.shape[0]
+
+    # Change this line:
+    order_to_wls = {i: [] for i in range(nords)}
+    
+    for wl in wls:
+        order_list = identify_orders(wave_arr, wl)
+        for order in order_list:
+            if order not in order_to_wls:
+                order_to_wls[order] = []
+            order_to_wls[order].append(wl)
+        
+    order_to_wls_arr = np.array([order_to_wls[order] for order in range(nords)], 
+                                dtype=object)
+
+    return order_to_wls_arr
+
+from scipy.optimize import linear_sum_assignment
+
+def hungarian_bipartite(wls_arr, peaks_arr, tolerance=0.05):
+    # Create cost matrix
+    cost_matrix = np.abs(wls_arr[:, np.newaxis] - peaks_arr[np.newaxis, :])
+    
+    # Set costs to infinity for pairs exceeding tolerance
+    cost_matrix[cost_matrix > tolerance] = np.inf
+    
+    # Initialize result
+    recovered_wls = np.zeros(len(wls_arr), dtype=bool)
+    
+    try:
+        wl_indices, peak_indices = linear_sum_assignment(cost_matrix)
+        
+        # Mark only valid matches as True
+        for wl_idx, peak_idx in zip(wl_indices, peak_indices):
+            if np.isfinite(cost_matrix[wl_idx, peak_idx]):
+                recovered_wls[wl_idx] = True
+                
+    except ValueError:
+        # If infeasible, all wavelengths remain False
+        pass
+
+    return recovered_wls
+
+def per_alpha_recovery(wave_arr, inj_list):
+    nords, ncols, nobs = wave_arr.shape
+
+    obs_recovered = np.empty((nords, nobs), dtype=object)
+    for obsidx, inj_path in enumerate(inj_list):
+        injection = np.load(inj_path, allow_pickle=True)
+        inj_arr = injection['arr_0'] 
+    
+        if obsidx == 0: 
+            ordidx = 0
+            wls = np.sort(inj_arr[ordidx]['wls']) # wls arr same for all ords
+    
+            mult = inj_arr[ordidx]['mult'] #mult same for all obs (1 mult per alpha)
+            
+            order_to_wls_arr = get_ord_to_wl_arr(wave_arr, wls)
+    
+        for ordidx in range(nords):
+            x_test_pass = inj_arr[ordidx]['x_test_pass']
+            wls_in_order = order_to_wls_arr[ordidx]
+            wls_arr = np.array(wls_in_order)
+            peaks_arr = np.array(x_test_pass)
+
+            recovered_wls = hungarian_bipartite(wls_arr, 
+                                                peaks_arr, 
+                                                tolerance=tolerance)
+    
+            #     obs_wls.append(wls_in_order)
+            #     obs_mult.append(mult)
+            obs_recovered[ordidx, obsidx] = recovered_wls
+
+    return order_to_wls_arr, mult, obs_recovered
