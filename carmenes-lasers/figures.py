@@ -3,6 +3,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 
 from itertools import cycle
+from pathlib import Path
 
 mpl.rcParams['mathtext.fontset'] = 'cm'          # Computer Modern serif
 mpl.rcParams['mathtext.rm'] = 'serif'
@@ -22,6 +23,38 @@ plt.rcParams.update({'axes.linewidth' : 1.5,
                     })
 plt.style.use('tableau-colorblind10')
 tableau_cb10 = plt.rcParams['axes.prop_cycle'].by_key()['color'] 
+
+def plot_observations_hist(data_root, save_path):
+    extract_path = data_root + "/spectra/extracted"
+    
+    root = Path(extract_path)  # change to target directory
+    
+    names, filect = [], []
+    for d in sorted(p for p in root.iterdir() if p.is_dir()):
+        n_files = sum(1 for p in d.iterdir() if p.is_file() and "sci-gtoc" in p.name)
+        names.append(d.name)
+        filect.append(n_files)
+    
+    filect = np.array(filect)
+    
+    # combined range (or set explicit min/max)
+    xmin, xmax = filect.min(), filect.max()
+    # choose number of bins and make edges
+    nbins = 30
+    bins = np.linspace(xmin, xmax, nbins + 1)
+    plt.grid()
+    
+    plt.hist(filect[filect >= 50], bins=bins, edgecolor='black', label=f">50: {len(filect[filect >= 50])}")
+    mask = (filect >= 10) & (filect < 50)
+    plt.hist(filect[mask], bins=bins, edgecolor='black', label=f"10-50: {len(filect[mask])}")
+    plt.hist(filect[filect < 10], bins=bins, edgecolor='black', label=f"<10: {len(filect[filect < 10])}")
+    
+    plt.legend()
+    plt.yscale('log')
+    plt.ylabel("$N_{\\star}$")
+    plt.xlabel("$N_{obs}$")
+    plt.legend()
+    plt.savefig(save_path + "/obs_hist.png", transparent=True, dpi=600)
         
 def plot_spectra_elike(fig, axs, x, y, n_sections, title=None, xlabel=None, ylabel=None):
     x_sections = np.array_split(x, n_sections)
@@ -277,5 +310,5 @@ def plot_recovery_rate(tolerances, recovered_percentage, recovered_percentage_pa
     plt.xscale("log")
     plt.grid()
     plt.ylabel("% Recovered Injections")
-    plt.xlabel("Allowed $\AA$ Away from Injection")
+    plt.xlabel("Allowed $\\AA$ Away from Injection")
     plt.legend()
