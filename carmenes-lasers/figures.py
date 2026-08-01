@@ -54,6 +54,8 @@ def plot_observations_hist(data_root, save_path):
     plt.ylabel("$N_{\\star}$")
     plt.xlabel("$N_{obs}$")
     plt.legend()
+    plt.tight_layout()
+
     plt.savefig(save_path + "/obs_hist.png", transparent=True, dpi=600)
         
 def plot_spectra_elike(fig, axs, x, y, n_sections, title=None, xlabel=None, ylabel=None):
