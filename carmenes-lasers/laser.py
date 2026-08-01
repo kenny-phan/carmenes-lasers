@@ -41,49 +41,104 @@ def get_residual(spec_arr):
     residual_arr = spec_arr - median_obs[:, :, np.newaxis]
     
     return residual_arr
+
+# fwhm equations
+def distance(x1, y1, x2, y2):
+    xdiff = x1-x2
+    ydiff = y1-y2
+    return np.sqrt(xdiff**2 + ydiff**2)
+
+def find_close_points(x, y, x1, y1):
+    tl = ((x < x1) & (y > y1))
+    tr = ((x > x1) & (y > y1))
+    bl = ((x < x1) & (y < y1))
+    br = ((x > x1) & (y < y1))
+    lims = (tl, bl, tr, br)
     
-def full_width_half_max(x, y, peakx, half_maxes, max_diff=0.01, verbose=False):
-    fwhm_arr = []
-    x_peaks = []
-    valid_mask = np.zeros(len(half_maxes), dtype=bool)  # True = peak passed, False = excluded
+    close_idxs = [0] * 4
+    for i, idx in enumerate(lims):
+
+        dist_arr = distance(x1, y1, x[idx], y[idx])
+        try:
+            close_idxs[i] = np.argmin(dist_arr)
+        except ValueError as e:
+            close_idxs[i] = np.nan
+
+    return close_idxs, lims
+
+def get_a_fwhm(x, y, x1, y1, peakidx):
+    close_idxs, lims = find_close_points(x, y, x1, y1)
+
+    close_xs = [0] * 4
+    for i, idx in enumerate(lims):
+        if np.isnan(close_idxs[i]):
+            close_xs[i] = x[peakidx]
+        else:
+            close_xs[i] = x[idx][close_idxs[i]]
+    low_x = np.abs(close_xs[0] - close_xs[1])
+    high_x = np.abs(close_xs[2] - close_xs[3])
+    fwhm = high_x + low_x
+
+    return fwhm, low_x, high_x
+
+# pre dave convo
+# def full_width_half_max(x, y, peakx, half_maxes, max_diff=0.01, verbose=False):
+#     fwhm_arr = []
+#     x_peaks = []
+#     valid_mask = np.zeros(len(half_maxes), dtype=bool)  # True = peak passed, False = excluded
     
-    for i, half_max in enumerate(half_maxes):
-        # half_max = peak/2
-        center_freq = peakx[i]
+#     for i, half_max in enumerate(half_maxes):
+#         # half_max = peak/2
+#         center_freq = peakx[i]
 
-        debug_print(verbose, "center freq", center_freq)
+#         debug_print(verbose, "center freq", center_freq)
 
-        x_args = np.where(np.abs(y - half_max) < max_diff)
-        x_vals = x[x_args]
+#         x_args = np.where(np.abs(y - half_max) < max_diff)
+#         x_vals = x[x_args]
 
-        debug_print(verbose, 
-                    f"{len(x_vals)} intersections between the spectrum and half max of this peak.")
+#         debug_print(verbose, 
+#                     f"{len(x_vals)} intersections between the spectrum and half max of this peak.")
 
-        lower_mask = (x_vals < center_freq)
-        upper_mask = (x_vals > center_freq)
+#         lower_mask = (x_vals < center_freq)
+#         upper_mask = (x_vals > center_freq)
 
-        if np.any(lower_mask == True) and np.any(upper_mask == True):
-            lower_freq_arg = np.argmin(np.abs(center_freq - x_vals[lower_mask]))
-            upper_freq_arg = np.argmin(np.abs(center_freq - x_vals[upper_mask]))
+#         if np.any(lower_mask == True) and np.any(upper_mask == True):
+#             lower_freq_arg = np.argmin(np.abs(center_freq - x_vals[lower_mask]))
+#             upper_freq_arg = np.argmin(np.abs(center_freq - x_vals[upper_mask]))
     
-            lower_freq = x_vals[lower_mask][lower_freq_arg]
-            upper_freq = x_vals[upper_mask][upper_freq_arg]
-            debug_print(verbose, "lower, upper freqs", lower_freq, upper_freq)
-            fwhm = upper_freq - lower_freq
-            fwhm_arr.append(fwhm)
-            x_peaks.append(center_freq)
-            valid_mask[i] = True  # Mark this index as valid
+#             lower_freq = x_vals[lower_mask][lower_freq_arg]
+#             upper_freq = x_vals[upper_mask][upper_freq_arg]
+#             debug_print(verbose, "lower, upper freqs", lower_freq, upper_freq)
+#             fwhm = upper_freq - lower_freq
+#             fwhm_arr.append(fwhm)
+#             x_peaks.append(center_freq)
+#             valid_mask[i] = True  # Mark this index as valid
             
-        elif np.all(lower_mask == False):
-            debug_print(verbose, f"peak at {np.round(center_freq,2)} is at the lower edge")
-            continue 
+#         elif np.all(lower_mask == False):
+#             debug_print(verbose, f"peak at {np.round(center_freq,2)} is at the lower edge")
+#             continue 
             
-        elif np.all(upper_mask == False):
-            debug_print(verbose, f"peak at {np.round(center_freq,2)} is at the upper edge")
-            continue 
+#         elif np.all(upper_mask == False):
+#             debug_print(verbose, f"peak at {np.round(center_freq,2)} is at the upper edge")
+#             continue 
         
-    return np.array(fwhm_arr), np.array(x_peaks), valid_mask
+#     return np.array(fwhm_arr), np.array(x_peaks), valid_mask
+
+# post dave convo -- this will likely identify edges but thats ok
+def full_width_half_max(x, y, peaks, half_maxes, verbose=False):
+    fwhm_arr = np.empty_like(peaks)
     
+    peakx = x[peaks]
+    
+    for i in range(len(peaks)):
+        
+        debug_print(verbose, "center freq", peakx[i])
+        
+        fwhm, low_x, high_x = get_a_fwhm(x, y, peakx[i], half_maxes[i], peaks[i])
+        
+        fwhm_arr[i] = fwhm
+            
+    return fwhm_arr
 
 def wave_to_fwhms(wave, flux, sigma, poly, 
                   residual, coeff, 
@@ -110,15 +165,19 @@ def wave_to_fwhms(wave, flux, sigma, poly,
     wave_pks, flx_pks, poly_pks = wave[peaks], flux[peaks], poly[peaks]
 
     half_maxes = poly_pks + 0.5*(flx_pks - poly_pks)
-    
-    fwhms, x_peaks, valid_mask = full_width_half_max(wave, flux, 
-                                         wave_pks, half_maxes, 
-                                         max_diff, verbose=verbose) # fwhm of peaks
 
-    debug_print(verbose, f"fwhm peaks: {len(x_peaks)}")
+    # pre dave
+    # fwhms, x_peaks, valid_mask = full_width_half_max(wave, flux, 
+    #                                      wave_pks, half_maxes, 
+    #                                      max_diff, verbose=verbose) # fwhm of peaks
+
+    # post dave
+    fwhms = full_width_half_max(wave, flux, peaks, half_maxes, verbose=verbose) # fwhm of peaks
+
+    # debug_print(verbose, f"fwhm peaks: {len(x_peaks)}")
     
-    return (fwhms, x_peaks, half_maxes[valid_mask], 
-            flx_pks[valid_mask], threshold, 
+    return (fwhms, wave_pks, half_maxes, 
+            flx_pks, threshold, 
             wave, flux, poly, residual)
 
 def check_windex(wl):
@@ -584,10 +643,11 @@ def save_fwhm_per_obs(dir_path, save_folder,
                       wls=None, coeff=1, 
                       max_diff=0.01, 
                       threshold_type='mad', 
-                      interp_samples=50000, 
+                      interp_samples=None, 
                       method='pixel', 
                       px_min=2.5, 
-                      verbose=False):
+                      verbose=False, 
+                      all_data=False):
         
     norders = wave_arr.shape[0]
     nobs = wave_arr.shape[2]
@@ -619,22 +679,30 @@ def save_fwhm_per_obs(dir_path, save_folder,
                     method, px_min, 
                     verbose)
             
-            obs_arr[ordidx] = {
-                'fwhms': fwhms,
-                'x_peaks': x_peaks,
-                'half_maxes': half_maxes,
-                'flx_pks': flx_pks,
-                'threshold': threshold,
-                'wave': wave, 
-                'flux':flux,
-                'poly': poly,
-                'residual': residual, 
-                'lsf_fwhms': lsf_fwhms,
-                'fwhm_test_pass': fwhm_test_pass,
-                'x_test_pass': x_test_pass,
-                'mult': mult, 
-                'wls': wls
-            }
+            if all_data:
+                obs_arr[ordidx] = {
+                    'fwhms': fwhms,
+                    'x_peaks': x_peaks,
+                    'half_maxes': half_maxes,
+                    'flx_pks': flx_pks,
+                    'threshold': threshold,
+                    'wave': wave, 
+                    'flux':flux,
+                    'poly': poly,
+                    'residual': residual, 
+                    'lsf_fwhms': lsf_fwhms,
+                    'fwhm_test_pass': fwhm_test_pass,
+                    'x_test_pass': x_test_pass,
+                    'mult': mult, 
+                    'wls': wls
+                }
+            else:
+                obs_arr[ordidx] = {
+
+                    'x_test_pass': x_test_pass,
+                    'mult': mult, 
+                    'wls': wls
+                }
 
         save_path = dir_path + save_folder # e.g. "/base_peaks"
         if os.path.exists(save_path) is False: 
@@ -727,7 +795,7 @@ def hungarian_bipartite(wls_arr, peaks_arr, tolerance=0.05):
 
     return recovered_wls
 
-def per_alpha_recovery(wave_arr, inj_list):
+def per_alpha_recovery(wave_arr, inj_list, tolerance=0.05):
     nords, ncols, nobs = wave_arr.shape
 
     obs_recovered = np.empty((nords, nobs), dtype=object)
