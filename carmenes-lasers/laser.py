@@ -1,6 +1,7 @@
 import os
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 from astropy.modeling.models import Voigt1D
 from lmfit.models import VoigtModel
@@ -9,6 +10,7 @@ from scipy.signal import find_peaks
 from tqdm import tqdm
 
 from load_data import debug_print 
+from figures import plot_laser
 
 np.random.seed(seed=42)
 
@@ -51,10 +53,15 @@ def distance(x1, y1, x2, y2):
     return np.sqrt(xdiff**2 + ydiff**2)
 
 def find_close_points(x, y, x1, y1):
-    tl = ((x < x1) & (y > y1))
-    tr = ((x > x1) & (y > y1))
-    bl = ((x < x1) & (y < y1))
-    br = ((x > x1) & (y < y1))
+    x1_idx = np.argmin(np.abs(x - x1))
+
+    # Create mask for indices within ±10 of x1
+    nearby_mask = (np.arange(len(x)) >= x1_idx - 10) & (np.arange(len(x)) <= x1_idx + 10)
+    
+    tl = ((x < x1) & (y > y1) & nearby_mask)
+    tr = ((x > x1) & (y > y1) & nearby_mask)
+    bl = ((x < x1) & (y < y1) & nearby_mask)
+    br = ((x > x1) & (y < y1) & nearby_mask)
     lims = (tl, bl, tr, br)
     
     close_idxs = [0] * 4
@@ -68,7 +75,7 @@ def find_close_points(x, y, x1, y1):
 
     return close_idxs, lims
 
-def get_a_fwhm(x, y, x1, y1, peakidx):
+def get_a_fwhm(x, y, x1, y1, peakidx, verbose):
     close_idxs, lims = find_close_points(x, y, x1, y1)
 
     close_xs = [0] * 4
@@ -77,58 +84,16 @@ def get_a_fwhm(x, y, x1, y1, peakidx):
             close_xs[i] = x[peakidx]
         else:
             close_xs[i] = x[idx][close_idxs[i]]
-    low_x = np.abs(close_xs[0] - close_xs[1])
-    high_x = np.abs(close_xs[2] - close_xs[3])
-    fwhm = high_x + low_x
+    low_x = np.abs(close_xs[0] - close_xs[1]) + close_xs[1]
+    high_x = np.abs(close_xs[2] - close_xs[3]) + close_xs[2]
+    fwhm = high_x - low_x
 
-    return fwhm, low_x, high_x
-
-# pre dave convo
-# def full_width_half_max(x, y, peakx, half_maxes, max_diff=0.01, verbose=False):
-#     fwhm_arr = []
-#     x_peaks = []
-#     valid_mask = np.zeros(len(half_maxes), dtype=bool)  # True = peak passed, False = excluded
-    
-#     for i, half_max in enumerate(half_maxes):
-#         # half_max = peak/2
-#         center_freq = peakx[i]
-
-#         debug_print(verbose, "center freq", center_freq)
-
-#         x_args = np.where(np.abs(y - half_max) < max_diff)
-#         x_vals = x[x_args]
-
-#         debug_print(verbose, 
-#                     f"{len(x_vals)} intersections between the spectrum and half max of this peak.")
-
-#         lower_mask = (x_vals < center_freq)
-#         upper_mask = (x_vals > center_freq)
-
-#         if np.any(lower_mask == True) and np.any(upper_mask == True):
-#             lower_freq_arg = np.argmin(np.abs(center_freq - x_vals[lower_mask]))
-#             upper_freq_arg = np.argmin(np.abs(center_freq - x_vals[upper_mask]))
-    
-#             lower_freq = x_vals[lower_mask][lower_freq_arg]
-#             upper_freq = x_vals[upper_mask][upper_freq_arg]
-#             debug_print(verbose, "lower, upper freqs", lower_freq, upper_freq)
-#             fwhm = upper_freq - lower_freq
-#             fwhm_arr.append(fwhm)
-#             x_peaks.append(center_freq)
-#             valid_mask[i] = True  # Mark this index as valid
-            
-#         elif np.all(lower_mask == False):
-#             debug_print(verbose, f"peak at {np.round(center_freq,2)} is at the lower edge")
-#             continue 
-            
-#         elif np.all(upper_mask == False):
-#             debug_print(verbose, f"peak at {np.round(center_freq,2)} is at the upper edge")
-#             continue 
-        
-#     return np.array(fwhm_arr), np.array(x_peaks), valid_mask
+    debug_print(verbose, f"low_x = {low_x}, high_x = {high_x}")
+    return fwhm, low_x, high_x, close_idxs, lims
 
 # post dave convo -- this will likely identify edges but thats ok
-def full_width_half_max(x, y, peaks, half_maxes, verbose=False):
-    fwhm_arr = np.empty_like(peaks)
+def full_width_half_max(x, y, peaks, half_maxes, verbose=False, plot=False):
+    fwhm_arr = np.empty_like(peaks, dtype=float)
     
     peakx = x[peaks]
     
@@ -136,17 +101,20 @@ def full_width_half_max(x, y, peaks, half_maxes, verbose=False):
         
         debug_print(verbose, "center freq", peakx[i])
         
-        fwhm, low_x, high_x = get_a_fwhm(x, y, peakx[i], half_maxes[i], peaks[i])
+        fwhm, low_x, high_x, close_idxs, lims = get_a_fwhm(x, y, peakx[i], half_maxes[i], peaks[i], verbose=verbose)
         
         fwhm_arr[i] = fwhm
-            
+        
+        if plot:
+            plot_laser(x, y, peaks[i], peakx[i], half_maxes[i], close_idxs, lims, low_x, high_x, xlim=[low_x, high_x])
+            plt.show()
     return fwhm_arr
 
 def wave_to_fwhms(wave, flux, sigma, poly, 
                   residual, coeff, 
                   max_diff=0.01, 
                   threshold_type="mad", interp_samples=None,
-                  verbose=False):
+                  verbose=False, plot=False):
 
     if interp_samples is not None:
         interp_wave = np.linspace(wave[0], wave[-1], num=interp_samples)
@@ -174,9 +142,9 @@ def wave_to_fwhms(wave, flux, sigma, poly,
     #                                      max_diff, verbose=verbose) # fwhm of peaks
 
     # post dave
-    fwhms = full_width_half_max(wave, flux, peaks, half_maxes, verbose=verbose) # fwhm of peaks
+    fwhms = full_width_half_max(wave, flux, peaks, half_maxes, verbose=verbose, plot=plot) # fwhm of peaks
 
-    # debug_print(verbose, f"fwhm peaks: {len(x_peaks)}")
+    debug_print(verbose, f"fwhm: {fwhms}")
     
     return (fwhms, wave_pks, half_maxes, 
             flx_pks, threshold, 
@@ -417,7 +385,7 @@ def thresh_and_fwhm(wave, flux,
                     threshold_type, 
                     interp_samples, 
                     method, px_min, 
-                    verbose):
+                    verbose, plot=False):
     
     (fwhms, x_peaks, half_maxes, 
     flx_pks, threshold, 
@@ -430,13 +398,15 @@ def thresh_and_fwhm(wave, flux,
                                            max_diff=max_diff, 
                                            threshold_type=threshold_type, 
                                            interp_samples=interp_samples, 
-                                           verbose=verbose)
+                                           verbose=verbose, plot=plot)
     
     lsf_fwhms = fwhm_test(wave, x_peaks, method=method, px_min=px_min)
+    debug_print()
+    
     fwhm_test_pass = fwhms[fwhms > lsf_fwhms] 
     # doesnt work with method"model"
     x_test_pass = x_peaks[fwhms > lsf_fwhms]
-
+    
     return (fwhms, x_peaks, 
             half_maxes, flx_pks, 
             threshold, 
@@ -460,6 +430,7 @@ def get_fwhm_arr(new_wave_arr, flux_arr,
     method = kwargs.get('method', "pixel")
     px_min = kwargs.get('px_min', 2.5)
     save_dir = kwargs.get('save_dir', None)
+    plot=kwargs.get('plot', False)
     
     norders = new_wave_arr.shape[0]
     nobs = new_wave_arr.shape[2]
@@ -488,7 +459,7 @@ def get_fwhm_arr(new_wave_arr, flux_arr,
                     threshold_type, 
                     interp_samples, 
                     method, px_min, 
-                    verbose)
+                    verbose, plot=plot)
             
             # Store as dictionary
             fwhm_arr[ordidx, obsidx] = {
@@ -523,7 +494,8 @@ def save_fwhm_per_obs(dir_path,
                       px_min=2.5, 
                       verbose=False, 
                       all_data=False, 
-                      save_folder=False):
+                      save_folder=False,
+                     plot=False):
         
     norders = wave_arr.shape[0]
     nobs = wave_arr.shape[2]
@@ -554,7 +526,7 @@ def save_fwhm_per_obs(dir_path,
                     threshold_type, 
                     interp_samples, 
                     method, px_min, 
-                    verbose)
+                    verbose, plot=plot)
             
             if all_data:
                 obs_arr[ordidx] = {

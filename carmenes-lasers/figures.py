@@ -314,3 +314,29 @@ def plot_recovery_rate(tolerances, recovered_percentage, recovered_percentage_pa
     plt.ylabel("% Recovered Injections")
     plt.xlabel("Allowed $\\AA$ Away from Injection")
     plt.legend()
+
+def plot_laser(wave, lase, peakidx, wl, hm, close_idxs, lims, low_wave, high_wave, xlim):
+    xpeak, ypeak = wave[peakidx], lase[peakidx]
+    plt.scatter(wave, lase)
+    plt.scatter(xpeak, ypeak, label="Peak")
+    plt.vlines(wl, 0, ypeak, linestyle="dashed", label="Center")
+    plt.plot(wave, np.full_like(wave, hm), linestyle="dashed", label="HM")
+    
+    close_waves, close_lases = [0] * 4, [0] * 4
+    for i, idx in enumerate(lims):
+        if np.isnan(close_idxs[i]):
+            close_waves[i] = wave[peakidx]
+            close_lases[i] = lase[peakidx]
+        else:
+            close_waves[i] = wave[idx][close_idxs[i]]
+            close_lases[i] = lase[idx][close_idxs[i]]
+        plt.scatter(close_waves[i], close_lases[i], label=f"close idx {i}")
+    
+    # low_wave = np.abs(close_waves[0] - close_waves[1])
+    # high_wave = np.abs(close_waves[2] - close_waves[3])
+    
+    plt.vlines(low_wave, 0, ypeak, linestyle="dashdot")
+    plt.vlines(high_wave, 0, ypeak, linestyle="dashdot")
+    
+    plt.xlim(xlim[0] - 1, xlim[1] + 1)
+    plt.legend()
