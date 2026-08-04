@@ -11,9 +11,9 @@ from laser import get_residual, thresh_and_fwhm
 def process_peaks(dir_path, coeff=1, 
                   max_diff=0.01, 
                   threshold_type='mad', 
-                  interp_samples=50000, 
+                  interp_samples=None, 
                   method='pixel', 
-                  px_min=2.5, 
+                  px_min=1, 
                   verbose=False):
 
     star_name = dir_path.split("extracted/")[-1]
@@ -46,7 +46,7 @@ def process_peaks(dir_path, coeff=1,
             threshold, 
             wave, flux, 
             poly, residual, 
-            lsf_fwhms, 
+            min_lsf_fwhms, max_lsf_fwhms,
             fwhm_test_pass, 
             x_test_pass) = thresh_and_fwhm(wave, flux, 
                     sigma, poly, 
@@ -67,7 +67,8 @@ def process_peaks(dir_path, coeff=1,
                 'flux':flux,
                 'poly': poly,
                 'residual': residual, 
-                'lsf_fwhms': lsf_fwhms,
+                'min_lsf_fwhms': min_lsf_fwhms,
+                'max_lsf_fwhms': max_lsf_fwhms,
                 'fwhm_test_pass': fwhm_test_pass,
                 'x_test_pass': x_test_pass
             }

@@ -336,7 +336,7 @@ def make_laser_arr(dir_path,
     return laser_arr
     
 
-def fwhm_test(wave, x_peaks, method="pixel", px_min=None, amplitude_L=1, broaden_coeff=1, model_type="astropy"):
+def fwhm_test(wave, x_peaks, method="pixel", px_min=1, px_max=4, amplitude_L=1, broaden_coeff=1, model_type="astropy"):
     
     if method == "pixel":
         # pixel - wavelength function to convert fwhm to pixels
@@ -344,9 +344,9 @@ def fwhm_test(wave, x_peaks, method="pixel", px_min=None, amplitude_L=1, broaden
         fit_coeffs = np.polyfit(pixels, wave, 1)
         wave_of_px = np.poly1d(fit_coeffs)
         
-        fwhm_min = wave_of_px(px_min) - wave_of_px(0)
-
-        return fwhm_min
+        fwhm_min = wave_of_px(px_min) - wave_of_px(0) # with flux conserving resampler, wave grids are ~linear
+        fwhm_max = wave_of_px(px_max) - wave_of_px(0)
+        return fwhm_min, fwhm_max
 
     if method == "model":
         unfilled_ranges = [True, True, True]
@@ -400,19 +400,18 @@ def thresh_and_fwhm(wave, flux,
                                            interp_samples=interp_samples, 
                                            verbose=verbose, plot=plot)
     
-    lsf_fwhms = fwhm_test(wave, x_peaks, method=method, px_min=px_min)
-    debug_print()
+    min_lsf_fwhms, max_lsf_fwhms = fwhm_test(wave, x_peaks, method=method, px_min=px_min)
     
-    fwhm_test_pass = fwhms[fwhms > lsf_fwhms] 
+    fwhm_test_pass = fwhms[(fwhms > min_lsf_fwhms) & (fwhms < max_lsf_fwhms)] 
     # doesnt work with method"model"
-    x_test_pass = x_peaks[fwhms > lsf_fwhms]
+    x_test_pass = x_peaks[(fwhms > min_lsf_fwhms) & (fwhms < max_lsf_fwhms)]
     
     return (fwhms, x_peaks, 
             half_maxes, flx_pks, 
             threshold, 
             wave, flux, 
             poly, residual, 
-            lsf_fwhms, 
+            min_lsf_fwhms, max_lsf_fwhms,
             fwhm_test_pass, 
             x_test_pass)
 
@@ -450,7 +449,7 @@ def get_fwhm_arr(new_wave_arr, flux_arr,
             threshold, 
             wave, flux, 
             poly, residual, 
-            lsf_fwhms, 
+            min_lsf_fwhms, max_lsf_fwhms,
             fwhm_test_pass, 
             x_test_pass) = thresh_and_fwhm(wave, flux, 
                     sigma, poly, 
@@ -472,7 +471,8 @@ def get_fwhm_arr(new_wave_arr, flux_arr,
                 'flux':flux,
                 'poly': poly,
                 'residual': residual, 
-                'lsf_fwhms': lsf_fwhms,
+                'min_lsf_fwhms': min_lsf_fwhms,
+                'max_lsf_fwhms': max_lsf_fwhms,
                 'fwhm_test_pass': fwhm_test_pass,
                 'x_test_pass': x_test_pass
             }
@@ -517,7 +517,7 @@ def save_fwhm_per_obs(dir_path,
             threshold, 
             wave, flux, 
             poly, residual, 
-            lsf_fwhms, 
+            min_lsf_fwhms, max_lsf_fwhms,
             fwhm_test_pass, 
             x_test_pass) = thresh_and_fwhm(wave, flux, 
                     sigma, poly, 
@@ -539,7 +539,8 @@ def save_fwhm_per_obs(dir_path,
                     'flux':flux,
                     'poly': poly,
                     'residual': residual, 
-                    'lsf_fwhms': lsf_fwhms,
+                    'min_lsf_fwhms': min_lsf_fwhms,
+                    'max_lsf_fwhms': max_lsf_fwhms,
                     'fwhm_test_pass': fwhm_test_pass,
                     'x_test_pass': x_test_pass,
                     'mult': mult, 
