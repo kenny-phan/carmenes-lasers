@@ -682,3 +682,140 @@ def per_alpha_recovery(wave_arr, inj_list, tolerance=0.05):
             obs_recovered[ordidx, obsidx] = recovered_wls
 
     return order_to_wls_arr, mult, obs_recovered
+
+def per_alpha_recovery_arr(wave_arr, one_alph, tolerance=0.05):
+    nords, ncols, nobs = wave_arr.shape
+
+    obs_recovered = np.empty((nords, nobs), dtype=object)
+    for obsidx in range(nobs):
+    
+        if obsidx == 0: 
+            ordidx = 0
+            wls = np.sort(one_alph[obsidx][ordidx]['wls']) # wls arr same for all ords
+    
+            mult = one_alph[obsidx][ordidx]['mult'] #mult same for all obs (1 mult per alpha)
+            
+            order_to_wls_arr = get_ord_to_wl_arr(wave_arr, wls)
+    
+        for ordidx in range(nords):
+            x_test_pass = one_alph[obsidx][ordidx]['x_test_pass']
+            wls_in_order = order_to_wls_arr[ordidx]
+            wls_arr = np.array(wls_in_order)
+            peaks_arr = np.array(x_test_pass)
+
+            recovered_wls = hungarian_bipartite(wls_arr, 
+                                                peaks_arr, 
+                                                tolerance=tolerance)
+    
+            #     obs_wls.append(wls_in_order)
+            #     obs_mult.append(mult)
+            obs_recovered[ordidx, obsidx] = recovered_wls
+
+    return order_to_wls_arr, mult, obs_recovered
+
+def recovery_1d(dir_path, wave_arr, tolerance=0.05):
+    all_alph = np.load(dir_path + "/injection.npz", allow_pickle=True)['arr_0']
+
+    all_wls_recovered, all_wls_not_recovered = [], []
+    all_mult_recovered, all_mult_not_recovered = [], []
+    nords, ncols, nobs = wave_arr.shape
+    
+    for aphidx in tqdm(range(len(all_alph))):
+        order_to_wls_arr, mult, obs_recovered = per_alpha_recovery_arr(wave_arr, 
+                                                                       all_alph[aphidx], 
+                                                                       tolerance=tolerance)
+        for obsidx in range(nobs):
+            for ordidx in range(nords):
+                wls = np.array(order_to_wls_arr[ordidx])
+                recovered = obs_recovered[ordidx, obsidx]
+                
+                # Skip if no data for this order-obs pair
+                if recovered is None:
+                    continue
+                
+                # Separate by recovery status
+                wls_recovered = wls[recovered]
+                wls_not_recovered = wls[~recovered]
+    
+                mult_recovered = np.zeros_like(wls_recovered) + mult
+                mult_not_recovered = np.zeros_like(wls_not_recovered) + mult
+    
+                all_wls_recovered.append(wls_recovered)
+                all_wls_not_recovered.append(wls_not_recovered)
+                all_mult_recovered.append(mult_recovered)
+                all_mult_not_recovered.append(mult_not_recovered)
+
+    plt_wls_recovered = np.hstack(all_wls_recovered) # plt meaning for plotting, aka 1d
+    plt_wls_not_recovered = np.hstack(all_wls_not_recovered)
+    plt_mult_recovered = np.hstack(all_mult_recovered)
+    plt_mult_not_recovered = np.hstack(all_mult_not_recovered)
+
+    return plt_wls_recovered, plt_wls_not_recovered, plt_mult_recovered, plt_mult_not_recovered
+
+def get_rr(alphas, plt_mult_recovered, plt_mult_not_recovered, 
+           plt_wls_recovered, plt_wls_not_recovered, wl_filter_range=None):
+    rr = np.empty((len(alphas)))
+    for i, alpha in enumerate(alphas):
+        reidxs = np.where(plt_mult_recovered == alpha)[0]
+        nridxs = np.where(plt_mult_not_recovered == alpha)[0]
+        wl_rec = plt_wls_recovered[reidxs]
+        wl_not_rec = plt_wls_not_recovered[nridxs]
+    
+        if wl_filter_range is not None:
+            wfrmin, wfrmax = wl_filter_range[0], wl_filter_range[1]
+            wl_rec_mask = np.where((wl_rec > wfrmin) & (wl_rec < wfrmax))
+            wl_not_rec_mask = np.where((wl_not_rec > wfrmin) & (wl_not_rec < wfrmax))
+            wl_rec = wl_rec[wl_rec_mask]
+            wl_not_rec = wl_not_rec[wl_not_rec_mask]
+        n_rec = len(wl_rec)
+        n_not_rec = len(wl_not_rec)
+    
+        try: 
+            rr[i] = n_rec / (n_rec + n_not_rec)
+        except ZeroDivisionError as e:
+            rr[i] = 0
+            
+    return rr
+
+def get_ir_threshold(plt_wls_recovered, plt_wls_not_recovered, 
+                     plt_mult_recovered, plt_mult_not_recovered, rr_thresh=0.997):
+    unique_wls_recovered = np.unique(plt_wls_recovered)
+    # min_alpha_recovered_vals = np.array([plt_mult_recovered[plt_wls_recovered == w].min() 
+    #                                      for w in unique_wls_recovered])
+    
+    # Not recovered case
+    unique_wls_not_recovered = np.unique(plt_wls_not_recovered)
+    # min_alpha_not_recovered_vals = np.array([plt_mult_not_recovered[plt_wls_not_recovered == w].min() 
+    #                                          for w in unique_wls_not_recovered])
+    
+    recovered_pairs = np.column_stack((plt_wls_recovered, plt_mult_recovered))
+    unique_pairs = np.unique(recovered_pairs, axis=0)
+    
+    min_alphas = []
+    filtered_wls = []
+    
+    for wls, mult in unique_pairs:
+        # Count this pair in recovered
+        count_rec = np.sum((plt_wls_recovered == wls) & (plt_mult_recovered == mult))
+        # Count this pair in not_recovered
+        count_not_rec = np.sum((plt_wls_not_recovered == wls) & (plt_mult_not_recovered == mult))
+        
+        # Calculate recovery rate
+        recovery_rate = count_rec / (count_rec + count_not_rec)
+        
+        if recovery_rate > rr_thresh:
+            # Check if we've already seen this wavelength
+            if wls in filtered_wls:
+                # Update with minimum mult
+                idx = filtered_wls.index(wls)
+                if mult < min_alphas[idx]:
+                    min_alphas[idx] = mult
+            else:
+                # First time seeing this wavelength
+                filtered_wls.append(wls)
+                min_alphas.append(mult)
+    
+    min_alphas = np.array(min_alphas)
+    filtered_wls = np.array(filtered_wls)
+
+    return min_alphas, filtered_wls
