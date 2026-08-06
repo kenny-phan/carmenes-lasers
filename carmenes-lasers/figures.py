@@ -3,6 +3,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 
 from itertools import cycle
+from matplotlib.ticker import MultipleLocator
 from pathlib import Path
 
 mpl.rcParams['mathtext.fontset'] = 'cm'          # Computer Modern serif
@@ -340,3 +341,37 @@ def plot_laser(wave, lase, peakidx, wl, hm, close_idxs, lims, low_wave, high_wav
     
     plt.xlim(xlim[0] - 1, xlim[1] + 1)
     plt.legend()
+
+# I+R FIGURES
+def plot_rr(alphas, rr):
+    plt.plot(alphas, rr, label='Recovery Rate')
+    plt.plot(alphas, np.full_like(alphas, .997, dtype=float), linestyle='dashdot', label="99.7% Recovery")
+    plt.plot(alphas, np.full_like(alphas, .95, dtype=float), linestyle='dashdot', label="95% Recovery")
+    
+    plt.ylabel('Recovery Rate')
+    # plt.yticks(np.arange(0,1.1,0.1))
+    plt.xlabel('$\\alpha$')
+    # plt.title(f"{wfrmin}-{wfrmax} $\\AA$")
+    plt.legend()
+    plt.grid()
+
+
+def plot_ir_threshold(plt_wls_recovered, plt_mult_recovered, 
+                      plt_wls_not_recovered, plt_mult_not_recovered, 
+                      filtered_wls, min_alphas, s=1):
+    fig, ax = plt.subplots(figsize=(20,5))
+    
+    ax.scatter(plt_wls_recovered, plt_mult_recovered, 
+                label="Recovered", s=s)
+    ax.scatter(plt_wls_not_recovered, plt_mult_not_recovered, 
+                label="Not Recovered", s=s)
+    
+    # ax.plot(unique_wls_recovered, min_alpha_recovered_vals, label="Any Recovered")
+    ax.plot(filtered_wls, min_alphas, label="99.7% Recovered")
+    
+    ax.set_xlabel("Wavelength ($\\AA$)")
+    ax.set_ylabel("$\\alpha$")
+    ax.legend(loc="upper right")
+    
+    # For the minor ticks, use no labels; default NullFormatter.
+    ax.xaxis.set_minor_locator(MultipleLocator(100))
