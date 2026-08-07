@@ -713,8 +713,7 @@ def per_alpha_recovery_arr(wave_arr, one_alph, tolerance=0.05):
 
     return order_to_wls_arr, mult, obs_recovered
 
-def recovery_1d(dir_path, wave_arr, tolerance=0.05):
-    all_alph = np.load(dir_path + "/injection.npz", allow_pickle=True)['arr_0']
+def recovery_1d(all_alph, wave_arr, tolerance=0.05):
 
     all_wls_recovered, all_wls_not_recovered = [], []
     all_mult_recovered, all_mult_not_recovered = [], []
