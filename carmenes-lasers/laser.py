@@ -854,3 +854,15 @@ def get_uni_thresh(all_alph, all_wls, all_nobs,
                  wave=common_wg, 
                  alpha=alpha_uni)
     return common_wg, alpha_uni
+
+def alpha_nstar_rates(all_alph):
+    nstars = len(all_alph)
+    med_alphs = np.empty((nstars), dtype=float)
+    nstar_pass = np.copy(med_alphs)
+    for a, alph in enumerate(all_alph):
+        med_alphs[a] = np.median(alph)
+    
+    for ma, med_alph in enumerate(med_alphs):
+        nstar_pass[ma] = float(np.sum(med_alphs > med_alphs[ma]))
+
+    return med_alphs, nstar_pass
