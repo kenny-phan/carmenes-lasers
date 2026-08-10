@@ -818,3 +818,39 @@ def get_ir_threshold(plt_wls_recovered, plt_wls_not_recovered,
     filtered_wls = np.array(filtered_wls)
 
     return min_alphas, filtered_wls
+
+def get_uni_thresh_ingredients(dir_list):
+    all_alph, all_wls, all_nobs = [], [], []
+    for diridx in tqdm(range(len(dir_list))):
+        dir_path = dir_list[diridx]
+        results = np.load(dir_path + "/results.npz")
+        wave_arr = results['new_wave_arr']
+        
+        nobs = wave_arr.shape[2]
+        star_name = dir_path.split("extracted/")[-1]
+        star_thresh = np.load(dir_path + f"/{star_name}threshold.npz", allow_pickle=True)
+        alphas, wls = star_thresh['alphas'], star_thresh['wls']
+        all_alph.append(alphas)
+        all_wls.append(wls)
+        all_nobs.append(nobs)
+
+    return all_alph, all_wls, all_nobs
+
+def get_uni_thresh(all_alph, all_wls, all_nobs, 
+                   common_wg=None, 
+                   save_dir=None):
+    totobs = np.sum(np.array(all_nobs))
+    if common_wg is None:
+        common_wg = np.arange(5140, 10400, 1)
+    alpha_uni = np.zeros_like(common_wg, dtype=float)
+    #check if injected wls same
+    for i, alpha in enumerate(all_alph):
+        alpha_wg = np.interp(common_wg, all_wls[i], alpha)
+        alpha_factored = alpha_wg * all_nobs[i] / totobs
+        alpha_uni += alpha_factored
+
+    if save_dir is not None:
+        np.savez(save_dir + "/universal_threshold.npz", 
+                 wave=common_wg, 
+                 alpha=alpha_uni)
+    return common_wg, alpha_uni
