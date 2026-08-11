@@ -866,3 +866,54 @@ def alpha_nstar_rates(all_alph):
         nstar_pass[ma] = float(np.sum(med_alphs > med_alphs[ma]))
 
     return med_alphs, nstar_pass
+
+
+##### PER ORDER INJ+REC #####
+
+def generate_inj_params_ord(low=5140, 
+                            high=10400, 
+                            length=100, 
+                            magic_wls=None):
+    
+    # Generate equally spaced wavelengths
+    wls = np.linspace(low, high, length)
+
+    for magic_wl in magic_wls:
+        closest_idx = np.argmin(np.abs(wls - magic_wl))
+        wls[closest_idx] = magic_wl
+
+    return wls
+
+def get_inj_wls_obs(dir_path, obsidx, default_length=20, magic_wls_list=[5321, 6565, 5891], wls_prev=[]): #hippke 2018
+    results = np.load(dir_path + f"/base_peaks/base_peaks_{obsidx}.npz", 
+                      allow_pickle=True)['arr_0']
+    
+    wls_arr = np.empty((len(results), default_length), dtype=float)
+    for r, result in enumerate(results):
+        length = default_length
+    
+        wave = result['wave']
+        low, high = wave[0], wave[-1]
+                
+        if r > 0:
+            wls_prev = wls_arr[r-1][(wls_arr[r-1] >= low) & (wls_arr[r-1] <= high)]
+            if len(wls_prev) > 0:
+                length = length - len(wls_prev)
+                low = np.max(wls_prev)
+        
+        spacing = (high - low) / (2 * length)
+        rand_adjust = np.random.uniform(0, spacing)
+
+        magic_wls = [wl for wl in magic_wls_list if low <= wl <= high]
+
+        wls_ord = generate_inj_params_ord(low=low + rand_adjust, 
+                                  high=high - rand_adjust, 
+                                  length=length, 
+                                  magic_wls=magic_wls)
+    
+        if len(wls_prev) > 0:
+            wls_arr[r] = np.concatenate((wls_prev, wls_ord))
+        else: 
+            wls_arr[r] = wls_ord
+            
+    return wls_arr
