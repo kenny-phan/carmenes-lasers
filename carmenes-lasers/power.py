@@ -1,9 +1,13 @@
+import glob
 import astropy.units as u
 import numpy as np
 
 from astropy.constants import L_sun
 from astropy.coordinates import SkyCoord
 from astroquery.gaia import Gaia
+from tqdm import tqdm
+
+from load_data import load_star
 
 Gaia.MAIN_GAIA_TABLE = "gaiadr3.gaia_source" 
 
@@ -29,6 +33,7 @@ def flux_to_app_mag(flux, zp=25.6884): # Gaia G-Band zero point
     return mag
 
 def app_mag_to_abs_mag(m, d):
+    d = np.abs(d)
     M = m - 5*np.log10(d/10)
     return M
 
@@ -77,11 +82,12 @@ def abs_mag_to_lum_err(M_1, M_1_err,
     
 
 def gaia_to_lum(result):
+
     dist_arcsec = (result['parallax']).to(u.arcsec)
     dist_arcsec_err = (result['parallax_error']).to(u.arcsec)
     
     flux = result['phot_g_mean_flux'] # electrons / sec
-    flux_err = result['phot_g_mean_flux_error'] 
+    flux_err = result['phot_g_mean_flux_error']
         
     app_mag = flux_to_app_mag(flux.value)
     app_mag_err = flux_to_app_mag_err(flux.value, flux_err.value)
@@ -146,3 +152,75 @@ def get_power_arr(wave_arr, base_peaks,
         sigma_arr[ordidx, :] = sigma
         
     return power_arr, power_err_arr, sigma_arr
+
+# FUNCTIONS TO PARSE ALL STARS
+
+def mode(a):
+    u, c = np.unique(a, return_counts=True)
+    m = u[np.argmax(c)] 
+
+    return m
+
+def in_bounds(arr, low=-90, high=90):
+        
+    return arr[(arr > low) & (arr < high)]
+
+def get_power(dir_path, alph, wls, staridx, delta_lambda=5000, d_t=3.5 * 1e10, W_LSF=0.056):
+    base_path = dir_path + "/base_peaks"
+    base_list = glob.glob(base_path + "/*")
+    
+    wavestack, polystack, thresholdstack = [], [], []
+    for obsidx in range(len(base_list)):
+        base_peaks = np.load(base_list[obsidx], 
+                             allow_pickle=True)['arr_0']
+        
+        # should deal with overlap later.. or not necessary if going by order?
+        obswave = np.concatenate([base_peaks[ordidx]['wave'] for ordidx in range(len(base_peaks))])
+        obspoly = np.concatenate([base_peaks[ordidx]['poly'] for ordidx in range(len(base_peaks))])
+        obsthreshold = np.concatenate([base_peaks[ordidx]['threshold'] for ordidx in range(len(base_peaks))])
+    
+        wavestack.append(obswave)
+        polystack.append(obspoly)
+        thresholdstack.append(obsthreshold)
+    
+    wavestack = np.array(wavestack)
+    polystack = np.array(polystack)
+    thresholdstack = np.array(thresholdstack)
+    
+    starwave = np.median(wavestack, axis=0)
+    polywave = np.median(polystack, axis=0)
+    thresholdwave = np.median(thresholdstack, axis=0)
+    
+    staralpha = np.interp(starwave, wls, alph)
+    
+    # power calculation
+    sigma = thresholdwave - polywave
+    
+    starvals = load_star(dir_path)
+
+    ra, dec = mode(starvals[5]), mode(in_bounds(starvals[6]))
+    # print(ra, dec)
+    gaia = gaia_query(ra, dec, radius=10*u.arcsec)
+
+    # print(gaia)
+    # gaia = gaia[0]
+    # print(gaia)
+    lum, lum_err = gaia_to_lum(gaia)
+
+    if len(lum) < 1:
+        print(ra, dec)
+        # print(lum)
+        print(f"skip {base_path}")
+        skipidx.append(staridx)
+        return None
+        
+    if len(lum) > 1: 
+        # print(lum)
+        lum = lum[0]
+        # print(lum)
+
+    power = phan_eq9(lum, starwave, 
+                 delta_lambda, d_t, 
+                 W_LSF, staralpha, sigma)
+
+    return power
